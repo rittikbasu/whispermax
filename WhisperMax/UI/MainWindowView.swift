@@ -73,8 +73,8 @@ private struct SidebarRail: View {
         VStack(spacing: 0) {
             VStack(spacing: 18) {
                 AppGlyph()
-                    .padding(.top, 42)
-                    .padding(.bottom, 16)
+                    .padding(.top, 48)
+                    .padding(.bottom, 28)
 
                 SidebarButton(
                     systemName: "house",
@@ -107,27 +107,13 @@ private struct SidebarRail: View {
 
 private struct AppGlyph: View {
     var body: some View {
-        VStack(spacing: 4) {
-            HStack(spacing: 4) {
-                GlyphDot(opacity: 0.42)
-                GlyphDot(opacity: 0.84)
-            }
-            HStack(spacing: 4) {
-                GlyphDot(opacity: 0.84)
-                GlyphDot(opacity: 0.42)
-            }
-        }
-        .frame(width: 18, height: 18)
-    }
-}
-
-private struct GlyphDot: View {
-    let opacity: Double
-
-    var body: some View {
-        Circle()
-            .fill(Color.white.opacity(opacity))
-            .frame(width: 4, height: 4)
+        Image("WhisperMaxMark")
+            .resizable()
+            .renderingMode(.template)
+            .interpolation(.high)
+            .aspectRatio(contentMode: .fit)
+            .frame(width: 46, height: 28)
+            .foregroundStyle(.white.opacity(0.96))
     }
 }
 
