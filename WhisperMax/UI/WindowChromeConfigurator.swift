@@ -50,8 +50,11 @@ struct WindowChromeConfigurator: NSViewRepresentable {
 
         let buttons = [closeButton, minimizeButton, zoomButton]
         let topInset: CGFloat = 14
-        let leadingInset: CGFloat = 18
         let spacing: CGFloat = 20
+        let sidebarWidth: CGFloat = 80
+        let buttonSize = closeButton.frame.width
+        let groupWidth = buttonSize + CGFloat(buttons.count - 1) * spacing
+        let leadingInset = floor((sidebarWidth - groupWidth) / 2)
         let buttonY = max(0, container.bounds.height - closeButton.frame.height - topInset)
 
         for (index, button) in buttons.enumerated() {

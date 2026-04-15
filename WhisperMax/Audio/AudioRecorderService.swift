@@ -87,7 +87,7 @@ final class AudioRecorderService: NSObject {
         let peakAmplitude = pow(10, peakPower / 20)
         let blendedAmplitude = min((averageAmplitude * 0.74) + (peakAmplitude * 0.26), 1.0)
         let gatedAmplitude = max(0, blendedAmplitude - 0.02) / 0.98
-        let normalizedPower = min(pow(gatedAmplitude * 1.85, 1.08), 1.0)
+        let normalizedPower = min(pow(gatedAmplitude, 0.82), 1.0)
         onMeter?(Float(normalizedPower), recorder.currentTime)
     }
 }

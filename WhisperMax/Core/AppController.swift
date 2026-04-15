@@ -79,7 +79,6 @@ final class AppController {
         return history.filter { entry in
             entry.text.localizedCaseInsensitiveContains(trimmedQuery)
                 || entry.modelName.localizedCaseInsensitiveContains(trimmedQuery)
-                || entry.insertionMethod.rawValue.localizedCaseInsensitiveContains(trimmedQuery)
         }
     }
 
@@ -92,6 +91,16 @@ final class AppController {
 
     var needsSetup: Bool {
         !microphoneGranted || !accessibilityGranted
+    }
+
+    private var readySubtitle: String {
+        let hour = Calendar.current.component(.hour, from: Date())
+        switch hour {
+        case 5..<12: return "Morning. What's on your mind?"
+        case 12..<17: return "Afternoon. Keep talking."
+        case 17..<21: return "Evening. Last thoughts?"
+        default: return "Late night. We're listening."
+        }
     }
 
     var homeSubtitle: String {
@@ -107,13 +116,13 @@ final class AppController {
         case .loadingModel:
             return "Loading local model…"
         case .ready:
-            return "Ready when you are"
+            return readySubtitle
         case .recording:
             return "Listening…"
         case .transcribing:
             return "Transcribing locally…"
-        case .inserted(let method):
-            return method == .accessibility ? "Inserted directly." : "Pasted and restored clipboard."
+        case .inserted:
+            return "Inserted into your app"
         case .error(let message):
             return message
         }
@@ -241,6 +250,11 @@ final class AppController {
         historyStore.save(history)
     }
 
+    func deleteEntry(_ entry: TranscriptEntry) {
+        history.removeAll { $0.id == entry.id }
+        historyStore.save(history)
+    }
+
     func copy(_ entry: TranscriptEntry) {
         NSPasteboard.general.clearContents()
         NSPasteboard.general.setString(entry.text, forType: .string)
@@ -360,9 +374,8 @@ final class AppController {
 
     private func pushWaveform(level: CGFloat) {
         let clampedLevel = max(0, min(level, 1.0))
-        let shapedLevel = pow(clampedLevel, 1.16)
-        let previous = waveformLevels.last ?? 0.012
-        let smoothedLevel = (previous * 0.18) + (shapedLevel * 0.82)
+        let previous = waveformLevels.last ?? 0.010
+        let smoothedLevel = (previous * 0.12) + (clampedLevel * 0.88)
         waveformLevels.append(smoothedLevel)
         if waveformLevels.count > 128 {
             waveformLevels.removeFirst(waveformLevels.count - 128)
