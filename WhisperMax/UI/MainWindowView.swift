@@ -17,8 +17,6 @@ private enum Theme {
     static let transcriptTimestamp = Color.white.opacity(0.30)
     static let transcriptMarker = Color(red: 0.22, green: 0.72, blue: 0.67)
     static let actionIdle = Color.white.opacity(0.24)
-    static let footerCount = Color.white.opacity(0.24)
-    static let footerAction = Color.white.opacity(0.34)
 }
 
 private enum Layout {
@@ -325,9 +323,8 @@ private struct HistorySection: View {
         controller.filteredHistory
     }
 
-    private var countLabel: String {
-        let count = entries.count
-        return count == 1 ? "1 TRANSCRIPTION" : "\(count) TRANSCRIPTIONS"
+    private var countText: String {
+        String(entries.count)
     }
 
     private var historyResetToken: String {
@@ -338,43 +335,27 @@ private struct HistorySection: View {
         VStack(alignment: .leading, spacing: Layout.historySpacing) {
             SectionHeader(
                 title: "TRANSCRIPTIONS",
+                countText: countText,
                 searchText: Bindable(controller).searchText
             )
 
             VirtualizedHistoryList(entries: entries)
                 .id(historyResetToken)
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .background(
-                RoundedRectangle(cornerRadius: 18, style: .continuous)
-                    .fill(
-                        LinearGradient(
-                            colors: [Theme.historyBoxTop, Theme.historyBoxBottom],
-                            startPoint: .top,
-                            endPoint: .bottom
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .background(
+                    RoundedRectangle(cornerRadius: 18, style: .continuous)
+                        .fill(
+                            LinearGradient(
+                                colors: [Theme.historyBoxTop, Theme.historyBoxBottom],
+                                startPoint: .top,
+                                endPoint: .bottom
+                            )
                         )
-                    )
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 18, style: .continuous)
-                            .stroke(Theme.historyBoxBorder, lineWidth: 1)
-                    )
-            )
-
-            HStack {
-                Text(countLabel)
-                    .font(.system(size: 10.5, weight: .medium))
-                    .tracking(2.0)
-                    .foregroundStyle(Theme.footerCount)
-
-                Spacer()
-
-                Button("CLEAR ALL", action: controller.clearHistory)
-                    .buttonStyle(.plain)
-                    .font(.system(size: 10.5, weight: .medium))
-                    .tracking(2.0)
-                    .foregroundStyle(controller.history.isEmpty ? .white.opacity(0.14) : Theme.footerAction)
-                    .disabled(controller.history.isEmpty)
-            }
-            .padding(.horizontal, 12)
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                                .stroke(Theme.historyBoxBorder, lineWidth: 1)
+                        )
+                )
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
     }
@@ -464,24 +445,41 @@ private struct HistoryViewportSentinel: View {
 
 private struct SectionHeader: View {
     let title: String
+    let countText: String?
     private let searchBinding: Binding<String>?
 
     init(title: String) {
         self.title = title
+        self.countText = nil
         self.searchBinding = nil
     }
 
-    init(title: String, searchText: Binding<String>) {
+    init(title: String, countText: String? = nil, searchText: Binding<String>) {
         self.title = title
+        self.countText = countText
         self.searchBinding = searchText
     }
 
     var body: some View {
         HStack(spacing: 10) {
-            Text(title)
-                .font(.system(size: 11, weight: .semibold))
-                .tracking(2.4)
-                .foregroundStyle(.white.opacity(0.36))
+            HStack(spacing: 6) {
+                Text(title)
+                    .font(.system(size: 11, weight: .semibold))
+                    .tracking(2.4)
+                    .foregroundStyle(.white.opacity(0.36))
+
+                if let countText {
+                    Text("·")
+                        .font(.system(size: 10, weight: .medium))
+                        .foregroundStyle(.white.opacity(0.18))
+
+                    Text(countText)
+                        .font(.system(size: 10.5, weight: .medium, design: .monospaced))
+                        .tracking(1.4)
+                        .monospacedDigit()
+                        .foregroundStyle(.white.opacity(0.22))
+                }
+            }
 
             if let searchBinding {
                 Spacer()
