@@ -28,6 +28,8 @@ private enum Layout {
     static let headerBottomPadding: CGFloat = 46
     static let contentBottomPadding: CGFloat = 28
     static let historySpacing: CGFloat = 18
+    static let historyInitialViewportCount = 60
+    static let historyBatchCount = 80
 }
 
 struct MainWindowView: View {
@@ -342,6 +344,10 @@ private struct HistorySection: View {
         return count == 1 ? "1 TRANSCRIPTION" : "\(count) TRANSCRIPTIONS"
     }
 
+    private var historyResetToken: String {
+        controller.searchText
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: Layout.historySpacing) {
             SectionHeader(
@@ -349,22 +355,8 @@ private struct HistorySection: View {
                 searchText: Bindable(controller).searchText
             )
 
-            ScrollView(showsIndicators: true) {
-                LazyVStack(spacing: 0) {
-                    if entries.isEmpty {
-                        EmptyHistoryState()
-                    } else {
-                        ForEach(entries) { entry in
-                            HistoryRow(entry: entry)
-
-                            if entry.id != entries.last?.id {
-                                FadingDivider()
-                            }
-                        }
-                    }
-                }
-                .padding(.vertical, entries.isEmpty ? 0 : 10)
-            }
+            VirtualizedHistoryList(entries: entries)
+                .id(historyResetToken)
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .background(
                 RoundedRectangle(cornerRadius: 18, style: .continuous)
@@ -399,6 +391,88 @@ private struct HistorySection: View {
             .padding(.horizontal, 12)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+    }
+}
+
+private struct VirtualizedHistoryList: View {
+    let entries: [TranscriptEntry]
+
+    @State private var visibleCount = Layout.historyInitialViewportCount
+
+    private var effectiveVisibleCount: Int {
+        min(visibleCount, entries.count)
+    }
+
+    private var visibleEntries: [TranscriptEntry] {
+        Array(entries.prefix(effectiveVisibleCount))
+    }
+
+    private var hasMoreEntries: Bool {
+        effectiveVisibleCount < entries.count
+    }
+
+    var body: some View {
+        ScrollView(showsIndicators: true) {
+            LazyVStack(spacing: 0) {
+                if entries.isEmpty {
+                    EmptyHistoryState()
+                } else {
+                    ForEach(visibleEntries) { entry in
+                        HistoryRow(entry: entry)
+
+                        if entry.id != visibleEntries.last?.id {
+                            FadingDivider()
+                        }
+                    }
+
+                    if hasMoreEntries {
+                        HistoryViewportSentinel(loadMore: loadMore)
+                    }
+                }
+            }
+            .padding(.vertical, entries.isEmpty ? 0 : 10)
+        }
+        .onAppear {
+            resetViewport()
+        }
+        .onChange(of: entries.count) { _ in
+            syncViewportToEntryCount()
+        }
+    }
+
+    private func resetViewport() {
+        visibleCount = min(Layout.historyInitialViewportCount, entries.count)
+    }
+
+    private func syncViewportToEntryCount() {
+        guard !entries.isEmpty else {
+            visibleCount = 0
+            return
+        }
+
+        visibleCount = min(max(visibleCount, Layout.historyInitialViewportCount), entries.count)
+    }
+
+    private func loadMore() {
+        guard visibleCount < entries.count else {
+            return
+        }
+
+        visibleCount = min(visibleCount + Layout.historyBatchCount, entries.count)
+    }
+}
+
+private struct HistoryViewportSentinel: View {
+    let loadMore: () -> Void
+
+    var body: some View {
+        Color.clear
+            .frame(height: 1)
+            .onAppear {
+                Task { @MainActor in
+                    loadMore()
+                }
+            }
     }
 }
 
