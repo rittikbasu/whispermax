@@ -1,0 +1,6 @@
+WhisperMax.xcodeproj
+Vendor/whisper.xcframework
+build
+DerivedData
+docs/
+.DS_Store
