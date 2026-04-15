@@ -7,7 +7,6 @@ SCHEME="WhisperMax"
 CONFIGURATION="Debug"
 SIGNING_IDENTITY="${WHISPERMAX_SIGNING_IDENTITY:-}"
 INSTALL_DIR="$HOME/Applications"
-INSTALL_APP_PATH="$INSTALL_DIR/WhisperMax.app"
 
 cd "$ROOT_DIR"
 
@@ -26,7 +25,9 @@ xcodebuild -project "$PROJECT_PATH" -scheme "$SCHEME" -configuration "$CONFIGURA
 BUILD_SETTINGS="$(xcodebuild -project "$PROJECT_PATH" -scheme "$SCHEME" -configuration "$CONFIGURATION" -showBuildSettings)"
 TARGET_BUILD_DIR="$(echo "$BUILD_SETTINGS" | awk -F ' = ' '/ TARGET_BUILD_DIR = / { print $2; exit }')"
 FULL_PRODUCT_NAME="$(echo "$BUILD_SETTINGS" | awk -F ' = ' '/ FULL_PRODUCT_NAME = / { print $2; exit }')"
+EXECUTABLE_NAME="$(echo "$BUILD_SETTINGS" | awk -F ' = ' '/ EXECUTABLE_NAME = / { print $2; exit }')"
 APP_PATH="$TARGET_BUILD_DIR/$FULL_PRODUCT_NAME"
+INSTALL_APP_PATH="$INSTALL_DIR/$FULL_PRODUCT_NAME"
 
 /usr/bin/codesign --force --deep --sign "$SIGNING_IDENTITY" "$APP_PATH"
 /bin/mkdir -p "$INSTALL_DIR"
@@ -34,7 +35,7 @@ APP_PATH="$TARGET_BUILD_DIR/$FULL_PRODUCT_NAME"
 /usr/bin/ditto "$APP_PATH" "$INSTALL_APP_PATH"
 /usr/bin/codesign --force --deep --sign "$SIGNING_IDENTITY" "$INSTALL_APP_PATH"
 /System/Library/Frameworks/CoreServices.framework/Versions/Current/Frameworks/LaunchServices.framework/Versions/Current/Support/lsregister -f -R -trusted "$INSTALL_APP_PATH" >/dev/null 2>&1 || true
-/usr/bin/pkill -f '/WhisperMax.app/Contents/MacOS/WhisperMax' || true
+/usr/bin/pkill -f "/${FULL_PRODUCT_NAME}/Contents/MacOS/${EXECUTABLE_NAME}" || true
 /bin/sleep 0.4
 /usr/bin/open "$INSTALL_APP_PATH"
 

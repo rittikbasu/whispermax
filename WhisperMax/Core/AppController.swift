@@ -132,7 +132,7 @@ final class AppController {
         do {
             try ModelLocator.prepareDirectories()
         } catch {
-            setError("Could not prepare WhisperMax storage.")
+            setError("Could not prepare whispermax storage.")
             return
         }
 

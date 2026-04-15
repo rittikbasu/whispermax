@@ -231,7 +231,7 @@ private struct PermissionSetupPanel: View {
                     .font(.system(size: 17, weight: .semibold))
                     .foregroundStyle(.white.opacity(0.9))
 
-                Text("Microphone lets WhisperMax record. Accessibility lets it insert text into other apps.")
+                Text("Microphone lets whispermax record. Accessibility lets it insert text into other apps.")
                     .font(.system(size: 13, weight: .regular))
                     .foregroundStyle(.white.opacity(0.42))
             }

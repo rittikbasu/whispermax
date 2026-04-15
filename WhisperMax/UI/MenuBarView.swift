@@ -8,7 +8,7 @@ struct MenuBarView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             VStack(alignment: .leading, spacing: 4) {
-                Text("WhisperMax")
+                Text("whispermax")
                     .font(.system(size: 14, weight: .semibold))
                 Text(controller.statusText)
                     .font(.system(size: 11, weight: .medium))
@@ -47,7 +47,7 @@ struct MenuBarView: View {
 
             Divider()
 
-            Button("Quit WhisperMax") {
+            Button("Quit whispermax") {
                 NSApp.terminate(nil)
             }
         }
