@@ -157,7 +157,7 @@ struct OnboardingView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(OnboardingWindowResizer())
         .onAppear {
-            controller.startSimulatedDownload()
+            controller.startModelSetup()
         }
     }
 }
@@ -231,7 +231,7 @@ private struct DownloadCard: View {
                 HStack {
                     Text(downloadStatusText)
                         .font(.system(size: 12, weight: .medium))
-                        .foregroundStyle(OnboardingTheme.mutedText)
+                        .foregroundStyle(controller.downloadError != nil ? Color(red: 0.95, green: 0.40, blue: 0.40) : OnboardingTheme.mutedText)
 
                     Spacer()
 
@@ -245,12 +245,21 @@ private struct DownloadCard: View {
 
             Spacer().frame(height: 32)
 
-            OnboardingButton(
-                title: controller.isDownloadComplete ? "Continue" : "Downloading\u{2026}",
-                isPrimary: controller.isDownloadComplete,
-                isEnabled: controller.isDownloadComplete,
-                action: controller.advanceOnboarding
-            )
+            if controller.downloadError != nil {
+                OnboardingButton(
+                    title: "Retry Download",
+                    isPrimary: true,
+                    isEnabled: true,
+                    action: controller.retryDownload
+                )
+            } else {
+                OnboardingButton(
+                    title: controller.isDownloadComplete ? "Continue" : "Downloading\u{2026}",
+                    isPrimary: controller.isDownloadComplete,
+                    isEnabled: controller.isDownloadComplete,
+                    action: controller.advanceOnboarding
+                )
+            }
         }
         .padding(.top, 8)
         .onAppear {
@@ -264,7 +273,8 @@ private struct DownloadCard: View {
     }
 
     private var downloadStatusText: String {
-        controller.isDownloadComplete ? "Speech model ready" : "Downloading speech model\u{2026}"
+        if controller.downloadError != nil { return "Download failed" }
+        return controller.isDownloadComplete ? "Speech model ready" : "Downloading speech model\u{2026}"
     }
 
     private var downloadSizeText: String {

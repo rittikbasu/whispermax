@@ -77,36 +77,46 @@ final class AppController {
     var onboardingStep: OnboardingStep = .download
     var downloadProgress: Double = 0
     var isDownloading: Bool = false
+    var downloadError: String? = nil
 
-    private var downloadSimulationTask: Task<Void, Never>?
+    private var modelDownloader: ModelDownloader?
 
     var isDownloadComplete: Bool { downloadProgress >= 1.0 }
 
-    func startSimulatedDownload() {
-        guard !isDownloading, !isDownloadComplete else { return }
+    func startModelSetup() {
+        // Model already on disk (own path or SuperWhisper's) — instant complete
+        if ModelLocator.preferredModelURL() != nil {
+            downloadProgress = 1.0
+            return
+        }
+
+        guard !isDownloading else { return }
         isDownloading = true
         downloadProgress = 0
+        downloadError = nil
 
-        downloadSimulationTask = Task { [weak self] in
-            let totalSteps = 60
-            for step in 1...totalSteps {
-                guard !Task.isCancelled else { return }
-                try? await Task.sleep(for: .milliseconds(50))
+        let downloader = ModelDownloader()
+        modelDownloader = downloader
 
-                await MainActor.run {
-                    guard let self else { return }
-                    let base = Double(step) / Double(totalSteps)
-                    let wobble = Double.random(in: -0.008...0.008)
-                    self.downloadProgress = min(base + wobble, 1.0)
-                }
-            }
-
-            await MainActor.run {
-                guard let self else { return }
-                self.downloadProgress = 1.0
-                self.isDownloading = false
-            }
+        downloader.onProgress = { [weak self] progress in
+            self?.downloadProgress = progress
         }
+        downloader.onComplete = { [weak self] in
+            self?.downloadProgress = 1.0
+            self?.isDownloading = false
+        }
+        downloader.onError = { [weak self] message in
+            self?.isDownloading = false
+            self?.downloadError = message
+        }
+
+        downloader.start()
+    }
+
+    func retryDownload() {
+        modelDownloader?.cancel()
+        modelDownloader = nil
+        startModelSetup()
     }
 
     func advanceOnboarding() {
