@@ -8,7 +8,7 @@ private enum OnboardingTheme {
     static let windowWidth: CGFloat = 540
     static let windowHeight: CGFloat = 520
 
-    static let background = Color(red: 0.042, green: 0.042, blue: 0.052)
+    static let background = Color(red: 0.03, green: 0.03, blue: 0.038)
     static let cardFill = Color.white.opacity(0.028)
     static let cardBorder = Color.white.opacity(0.06)
     static let progressTrack = Color.white.opacity(0.06)
@@ -100,24 +100,23 @@ struct OnboardingWindowRestorer: NSViewRepresentable {
         let view = NSView()
         DispatchQueue.main.async {
             guard let window = view.window else { return }
-            let defaultSize = NSSize(width: 1120, height: 840)
+            let targetSize = NSSize(width: 1120, height: 840)
+
             window.minSize = NSSize(width: 1040, height: 760)
             window.maxSize = NSSize(width: CGFloat.greatestFiniteMagnitude, height: CGFloat.greatestFiniteMagnitude)
-            window.setContentSize(defaultSize)
-
-            if let screen = window.screen ?? NSScreen.main {
-                let screenFrame = screen.visibleFrame
-                let x = screenFrame.midX - defaultSize.width / 2
-                let y = screenFrame.midY - defaultSize.height / 2
-                window.setFrameOrigin(NSPoint(x: x, y: y))
-            }
-
             window.styleMask.insert(.resizable)
             window.styleMask.insert(.miniaturizable)
             window.collectionBehavior.remove(.fullScreenNone)
             window.collectionBehavior.insert(.fullScreenPrimary)
             if let zoomButton = window.standardWindowButton(.zoomButton) {
                 zoomButton.isEnabled = true
+            }
+
+            if let screen = window.screen ?? NSScreen.main {
+                let screenFrame = screen.visibleFrame
+                let x = screenFrame.midX - targetSize.width / 2
+                let y = screenFrame.midY - targetSize.height / 2
+                window.setFrame(NSRect(origin: NSPoint(x: x, y: y), size: targetSize), display: false)
             }
         }
         return view

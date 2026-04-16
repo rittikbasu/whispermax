@@ -39,12 +39,13 @@ struct MainWindowView: View {
                 mainAppShell
                     .frame(minWidth: 1040, minHeight: 760)
                     .background(OnboardingWindowRestorer())
+                    .transition(.opacity)
             } else {
                 OnboardingView()
                     .transition(.opacity)
             }
         }
-        .animation(.easeInOut(duration: 0.4), value: controller.hasCompletedOnboarding)
+        .animation(.easeOut(duration: 0.35), value: controller.hasCompletedOnboarding)
         .background(WindowChromeConfigurator())
     }
 
