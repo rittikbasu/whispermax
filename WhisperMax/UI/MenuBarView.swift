@@ -28,8 +28,13 @@ struct MenuBarView: View {
                     Divider()
                 }
 
-                Button("History") {
-                    controller.sidebarSelection = .history
+                Button("Transcriptions") {
+                    controller.sidebarSelection = .home
+                    openMainWindow()
+                }
+
+                Button("Dictionary") {
+                    controller.sidebarSelection = .dictionary
                     openMainWindow()
                 }
 

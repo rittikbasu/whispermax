@@ -39,7 +39,7 @@ actor WhisperEngine {
         self.context = context
     }
 
-    func transcribe(audioURL: URL) throws -> String {
+    func transcribe(audioURL: URL, prompt: String? = nil) throws -> String {
         try prepare()
 
         guard let context else {
@@ -48,26 +48,32 @@ actor WhisperEngine {
 
         let samples = try decodeAudioFile(audioURL)
         let maxThreads = max(1, min(8, ProcessInfo.processInfo.processorCount - 2))
+        let transcriptionPrompt = prompt?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
 
         var fullParams = whisper_full_default_params(WHISPER_SAMPLING_GREEDY)
 
-        let status: Int32 = "en".withCString { language in
-            fullParams.print_realtime = false
-            fullParams.print_progress = false
-            fullParams.print_timestamps = false
-            fullParams.print_special = false
-            fullParams.translate = false
-            fullParams.language = language
-            fullParams.n_threads = Int32(maxThreads)
-            fullParams.offset_ms = 0
-            fullParams.no_context = true
-            fullParams.single_segment = false
-            fullParams.no_timestamps = true
+        let status: Int32 = (transcriptionPrompt ?? "").withCString { promptCString in
+            "en".withCString { language in
+                fullParams.print_realtime = false
+                fullParams.print_progress = false
+                fullParams.print_timestamps = false
+                fullParams.print_special = false
+                fullParams.translate = false
+                fullParams.language = language
+                fullParams.n_threads = Int32(maxThreads)
+                fullParams.offset_ms = 0
+                fullParams.no_context = true
+                fullParams.single_segment = false
+                fullParams.no_timestamps = true
+                fullParams.initial_prompt = transcriptionPrompt?.isEmpty == false ? promptCString : nil
+                fullParams.carry_initial_prompt = transcriptionPrompt?.isEmpty == false
 
-            whisper_reset_timings(context)
+                whisper_reset_timings(context)
 
-            return samples.withUnsafeBufferPointer { buffer in
-                whisper_full(context, fullParams, buffer.baseAddress, Int32(buffer.count))
+                return samples.withUnsafeBufferPointer { buffer in
+                    whisper_full(context, fullParams, buffer.baseAddress, Int32(buffer.count))
+                }
             }
         }
 

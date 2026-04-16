@@ -7,6 +7,7 @@ enum ModelLocator {
     }()
 
     static let historyFileURL = appSupportDirectory.appendingPathComponent("history.json")
+    static let wordDictionaryFileURL = appSupportDirectory.appendingPathComponent("word-dictionary.json")
     static let audioInputPreferenceFileURL = appSupportDirectory.appendingPathComponent("audio-input-preference.json")
     static let onboardingCompleteFileURL = appSupportDirectory.appendingPathComponent("onboarding-complete")
     static let downloadResumeDataURL = appSupportDirectory.appendingPathComponent("model-download.resumedata")

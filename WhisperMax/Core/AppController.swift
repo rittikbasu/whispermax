@@ -78,7 +78,7 @@ enum OnboardingMode: Equatable {
 
 enum SidebarSelection: String, CaseIterable {
     case home
-    case history
+    case dictionary
     case settings
 }
 
@@ -108,6 +108,7 @@ struct PendingTranscriptDeletion: Equatable {
 @Observable
 final class AppController {
     private let historyStore = HistoryStore()
+    private let wordDictionaryStore = WordDictionaryStore()
     private let inputDeviceService = AudioInputDeviceService()
     private let inputPreferenceStore = AudioInputPreferenceStore()
     let permissionsManager = PermissionsManager()
@@ -318,6 +319,7 @@ final class AppController {
     var lastTranscript: String = ""
     var searchText: String = ""
     var history: [TranscriptEntry] = []
+    var wordDictionary: [WordDictionaryEntry] = []
     var inputDevices: [AudioInputDevice] = []
     var statusText: String = "Loading local model..."
     var modelDisplayName: String = "Whisper Large V3 Turbo"
@@ -346,6 +348,12 @@ final class AppController {
         return history.filter { entry in
             entry.text.localizedCaseInsensitiveContains(trimmedQuery)
                 || entry.modelName.localizedCaseInsensitiveContains(trimmedQuery)
+        }
+    }
+
+    var sortedWordDictionary: [WordDictionaryEntry] {
+        wordDictionary.sorted {
+            $0.text.localizedCaseInsensitiveCompare($1.text) == .orderedAscending
         }
     }
 
@@ -490,6 +498,7 @@ final class AppController {
         loadOnboardingState()
         inputPreference = inputPreferenceStore.load()
         history = historyStore.load().sorted { $0.createdAt > $1.createdAt }
+        wordDictionary = wordDictionaryStore.load()
         refreshInputDevices()
         refreshPermissions()
         startPermissionMonitoring()
@@ -636,6 +645,58 @@ final class AppController {
         historyStore.save(history)
     }
 
+    func filteredWordDictionary(matching query: String) -> [WordDictionaryEntry] {
+        let trimmedQuery = normalizedDictionaryTerm(query)
+        guard !trimmedQuery.isEmpty else {
+            return sortedWordDictionary
+        }
+
+        return sortedWordDictionary.filter {
+            $0.text.localizedCaseInsensitiveContains(trimmedQuery)
+        }
+    }
+
+    func canAddWordDictionaryEntry(_ rawText: String) -> Bool {
+        let normalized = normalizedDictionaryTerm(rawText)
+        guard !normalized.isEmpty else {
+            return false
+        }
+
+        return !containsWordDictionaryEntry(normalized)
+    }
+
+    func containsWordDictionaryEntry(_ rawText: String) -> Bool {
+        let normalized = normalizedDictionaryTerm(rawText)
+        guard !normalized.isEmpty else {
+            return false
+        }
+
+        return wordDictionary.contains {
+            $0.text.compare(normalized, options: [.caseInsensitive, .diacriticInsensitive]) == .orderedSame
+        }
+    }
+
+    func addWordDictionaryEntry(_ rawText: String) {
+        let normalized = normalizedDictionaryTerm(rawText)
+        guard canAddWordDictionaryEntry(normalized) else {
+            return
+        }
+
+        wordDictionary.append(
+            WordDictionaryEntry(
+                id: UUID(),
+                text: normalized,
+                createdAt: Date()
+            )
+        )
+        wordDictionaryStore.save(wordDictionary)
+    }
+
+    func deleteWordDictionaryEntry(_ entry: WordDictionaryEntry) {
+        wordDictionary.removeAll { $0.id == entry.id }
+        wordDictionaryStore.save(wordDictionary)
+    }
+
     func deleteEntry(_ entry: TranscriptEntry) {
         history.removeAll { $0.id == entry.id }
         historyStore.save(history)
@@ -750,6 +811,48 @@ final class AppController {
         }
     }
 
+    private func normalizedDictionaryTerm(_ rawText: String) -> String {
+        rawText.replacingOccurrences(
+            of: "\\s+",
+            with: " ",
+            options: .regularExpression
+        )
+        .trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private var preferredTranscriptionTerms: [String] {
+        wordDictionary.map(\.text)
+    }
+
+    private var preferredTranscriptionPrompt: String? {
+        guard !wordDictionary.isEmpty else {
+            return nil
+        }
+
+        var selectedTerms: [String] = []
+        var characterBudget = 0
+        let orderedTerms = wordDictionary
+            .sorted { $0.createdAt > $1.createdAt }
+            .map(\.text)
+
+        for term in orderedTerms {
+            let separatorCost = selectedTerms.isEmpty ? 0 : 2
+            let nextCost = characterBudget + separatorCost + term.count
+            guard nextCost <= 320 else {
+                break
+            }
+
+            selectedTerms.append(term)
+            characterBudget = nextCost
+        }
+
+        guard !selectedTerms.isEmpty else {
+            return nil
+        }
+
+        return "Preferred spellings: \(selectedTerms.joined(separator: ", "))"
+    }
+
     private func prepareInputDeviceForRecording() {
         refreshInputDevices()
         preRecordingSystemDefaultInputDeviceID = nil
@@ -858,8 +961,14 @@ final class AppController {
         }
 
         do {
-            let rawText = try await whisperEngine.transcribe(audioURL: url)
-            let cleaned = TranscriptFormatter.normalize(rawText)
+            let rawText = try await whisperEngine.transcribe(
+                audioURL: url,
+                prompt: preferredTranscriptionPrompt
+            )
+            let cleaned = TranscriptFormatter.normalize(
+                rawText,
+                preferredTerms: preferredTranscriptionTerms
+            )
 
             guard !cleaned.isEmpty else {
                 setError("No speech was detected.")

@@ -6,6 +6,9 @@ private enum Theme {
     static let panel = Color.white.opacity(0.022)
     static let selectedFill = Color(red: 0.14, green: 0.18, blue: 0.27)
     static let selectedStroke = Color(red: 0.30, green: 0.46, blue: 0.77).opacity(0.34)
+    static let dictionaryAccent = Color(red: 0.49, green: 0.68, blue: 0.98)
+    static let dictionaryAccentFill = Color(red: 0.16, green: 0.21, blue: 0.31)
+    static let dictionaryAccentStroke = Color(red: 0.36, green: 0.50, blue: 0.80).opacity(0.48)
     static let sidebarDivider = Color.white.opacity(0.06)
     static let contentTop = Color(red: 0.051, green: 0.054, blue: 0.070)
     static let contentBottom = Color(red: 0.034, green: 0.036, blue: 0.048)
@@ -95,9 +98,9 @@ private struct SidebarRail: View {
                     action: { controller.sidebarSelection = .home }
                 )
                 SidebarButton(
-                    systemName: "clock.arrow.circlepath",
-                    isSelected: controller.sidebarSelection == .history,
-                    action: { controller.sidebarSelection = .history }
+                    systemName: "book.closed",
+                    isSelected: controller.sidebarSelection == .dictionary,
+                    action: { controller.sidebarSelection = .dictionary }
                 )
             }
             .frame(maxHeight: .infinity, alignment: .top)
@@ -179,8 +182,11 @@ private struct MainContentArea: View {
                 .padding(.bottom, Layout.headerBottomPadding)
 
                 switch controller.sidebarSelection {
-                case .home, .history:
+                case .home:
                     HistorySection()
+                        .frame(maxHeight: .infinity)
+                case .dictionary:
+                    DictionarySection()
                         .frame(maxHeight: .infinity)
                 case .settings:
                     ScrollView(showsIndicators: false) {
@@ -206,23 +212,41 @@ private struct WindowHeader: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
-            Text(greetingTitle)
+            Text(headerTitle)
                 .font(.system(size: 41, weight: .medium))
                 .tracking(-1.3)
                 .foregroundStyle(.white)
 
-            Text(controller.homeSubtitle)
+            Text(headerSubtitle)
                 .font(.system(size: 16, weight: .regular))
                 .foregroundStyle(.white.opacity(0.42))
         }
     }
 
-    private var greetingTitle: String {
-        let hour = Calendar.current.component(.hour, from: Date())
-        switch hour {
-        case 5..<12: return "Good morning"
-        case 12..<17: return "Good afternoon"
-        default: return "Good evening"
+    private var headerTitle: String {
+        switch controller.sidebarSelection {
+        case .home:
+            let hour = Calendar.current.component(.hour, from: Date())
+            switch hour {
+            case 5..<12: return "Good morning"
+            case 12..<17: return "Good afternoon"
+            default: return "Good evening"
+            }
+        case .dictionary:
+            return "Word Dictionary"
+        case .settings:
+            return "Settings"
+        }
+    }
+
+    private var headerSubtitle: String {
+        switch controller.sidebarSelection {
+        case .home:
+            return controller.homeSubtitle
+        case .dictionary:
+            return "Add the product names, phrases, and uncommon terms you want whispermax to hear correctly."
+        case .settings:
+            return "Tune the local workflow, input path, and system permissions."
         }
     }
 }
@@ -465,9 +489,9 @@ private struct SectionHeader: View {
     let countText: String?
     private let searchBinding: Binding<String>?
 
-    init(title: String) {
+    init(title: String, countText: String? = nil) {
         self.title = title
-        self.countText = nil
+        self.countText = countText
         self.searchBinding = nil
     }
 
@@ -739,6 +763,312 @@ private struct HistoryActionButton: View {
             .animation(.easeOut(duration: 0.14), value: isActive)
         }
         .buttonStyle(.plain)
+    }
+}
+
+// MARK: - Dictionary
+
+private struct DictionarySection: View {
+    @Environment(AppController.self) private var controller
+
+    @State private var queryText = ""
+
+    private var entries: [WordDictionaryEntry] {
+        controller.filteredWordDictionary(matching: queryText)
+    }
+
+    private var trimmedQuery: String {
+        queryText.replacingOccurrences(
+            of: "\\s+",
+            with: " ",
+            options: .regularExpression
+        )
+        .trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private var canAddQuery: Bool {
+        controller.canAddWordDictionaryEntry(queryText)
+    }
+
+    private var isExactMatch: Bool {
+        controller.containsWordDictionaryEntry(queryText)
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: Layout.historySpacing) {
+            SectionHeader(
+                title: "DICTIONARY",
+                countText: String(controller.wordDictionary.count)
+            )
+
+            VStack(spacing: 0) {
+                DictionaryInputRow(
+                    queryText: $queryText,
+                    addButtonTitle: addButtonTitle,
+                    canAddQuery: canAddQuery,
+                    addAction: addCurrentQuery
+                )
+
+                DictionaryInputDivider()
+
+                if entries.isEmpty {
+                    DictionaryEmptyState(
+                        queryText: trimmedQuery,
+                        canAddQuery: canAddQuery,
+                        addAction: addTerm
+                    )
+                } else {
+                    ScrollView(showsIndicators: true) {
+                        LazyVStack(spacing: 0) {
+                            ForEach(entries) { entry in
+                                DictionaryRow(entry: entry)
+
+                                if entry.id != entries.last?.id {
+                                    FadingDivider()
+                                }
+                            }
+                        }
+                        .padding(.vertical, 8)
+                    }
+                }
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+            .background(
+                RoundedRectangle(cornerRadius: 18, style: .continuous)
+                    .fill(
+                        LinearGradient(
+                            colors: [Theme.historyBoxTop, Theme.historyBoxBottom],
+                            startPoint: .top,
+                            endPoint: .bottom
+                        )
+                    )
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 18, style: .continuous)
+                            .stroke(Theme.historyBoxBorder, lineWidth: 1)
+                    )
+            )
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+    }
+
+    private var addButtonTitle: String {
+        if trimmedQuery.isEmpty {
+            return "Add"
+        }
+
+        return isExactMatch ? "Added" : "Add"
+    }
+
+    private func addCurrentQuery() {
+        addTerm(trimmedQuery)
+    }
+
+    private func addTerm(_ term: String) {
+        guard controller.canAddWordDictionaryEntry(term) else {
+            return
+        }
+
+        controller.addWordDictionaryEntry(term)
+        queryText = ""
+    }
+}
+
+private struct DictionaryInputRow: View {
+    @Binding var queryText: String
+
+    let addButtonTitle: String
+    let canAddQuery: Bool
+    let addAction: () -> Void
+
+    var body: some View {
+        HStack(spacing: 14) {
+            ZStack {
+                RoundedRectangle(cornerRadius: 11, style: .continuous)
+                    .fill(Color.white.opacity(0.032))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 11, style: .continuous)
+                            .stroke(Color.white.opacity(0.055), lineWidth: 1)
+                    )
+
+                Image(systemName: "book.closed")
+                    .font(.system(size: 15, weight: .medium))
+                    .foregroundStyle(.white.opacity(0.66))
+            }
+            .frame(width: 36, height: 36)
+
+            TextField(
+                "",
+                text: $queryText,
+                prompt: Text("Search or add a word or phrase…")
+                    .foregroundStyle(.white.opacity(0.22))
+            )
+            .textFieldStyle(.plain)
+            .font(.system(size: 18, weight: .regular))
+            .foregroundStyle(.white.opacity(0.86))
+            .onSubmit(addAction)
+
+            Button(addButtonTitle, action: addAction)
+                .buttonStyle(DictionaryAddButtonStyle(isEnabled: canAddQuery))
+                .disabled(!canAddQuery)
+        }
+        .padding(.horizontal, 22)
+        .frame(height: 76)
+    }
+}
+
+private struct DictionaryInputDivider: View {
+    var body: some View {
+        Rectangle()
+            .fill(Color.white.opacity(0.055))
+            .frame(height: 0.5)
+    }
+}
+
+private struct DictionaryRow: View {
+    @Environment(AppController.self) private var controller
+
+    let entry: WordDictionaryEntry
+
+    var body: some View {
+        HStack(alignment: .center, spacing: 18) {
+            Text(entry.text)
+                .font(.system(size: 18, weight: .medium))
+                .tracking(-0.2)
+                .foregroundStyle(.white.opacity(0.9))
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .fixedSize(horizontal: false, vertical: true)
+
+            HistoryActionButton(
+                normalSymbol: "trash",
+                activeSymbol: "trash.fill",
+                isActive: false,
+                activeTint: Color(red: 0.93, green: 0.38, blue: 0.34),
+                action: { controller.deleteWordDictionaryEntry(entry) }
+            )
+            .help("Remove from dictionary")
+        }
+        .padding(.horizontal, 22)
+        .padding(.vertical, 21)
+    }
+}
+
+private struct DictionaryEmptyState: View {
+    let queryText: String
+    let canAddQuery: Bool
+    let addAction: (String) -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 18) {
+            VStack(alignment: .leading, spacing: 10) {
+                Text(title)
+                    .font(.system(size: 29, weight: .medium))
+                    .tracking(-0.9)
+                    .foregroundStyle(.white.opacity(0.9))
+
+                Text(bodyText)
+                    .font(.system(size: 14, weight: .regular))
+                    .foregroundStyle(.white.opacity(0.40))
+                    .fixedSize(horizontal: false, vertical: true)
+                    .frame(maxWidth: 560, alignment: .leading)
+            }
+
+            if queryText.isEmpty {
+                VStack(alignment: .leading, spacing: 12) {
+                    Text("TRY THESE FIRST")
+                        .font(.system(size: 10.5, weight: .semibold))
+                        .tracking(1.8)
+                        .foregroundStyle(.white.opacity(0.28))
+
+                    HStack(spacing: 10) {
+                        DictionaryExampleChip(text: "Codex", addAction: addAction)
+                        DictionaryExampleChip(text: "Claude Code", addAction: addAction)
+                        DictionaryExampleChip(text: "Groq", addAction: addAction)
+                    }
+                }
+            }
+        }
+        .frame(maxWidth: .infinity, minHeight: 280, alignment: .topLeading)
+        .padding(.horizontal, 22)
+        .padding(.vertical, 30)
+    }
+
+    private var title: String {
+        queryText.isEmpty ? "Start with the words whispermax misses" : "No matching entries"
+    }
+
+    private var bodyText: String {
+        if queryText.isEmpty {
+            return "Add product names, people, commands, and uncommon phrases. whispermax will use them as spelling hints during local transcription."
+        }
+
+        return canAddQuery
+            ? "Press Add above to save this term to your dictionary."
+            : "Try a different search term."
+    }
+}
+
+private struct DictionaryExampleChip: View {
+    let text: String
+    let addAction: (String) -> Void
+
+    var body: some View {
+        Button {
+            addAction(text)
+        } label: {
+            HStack(spacing: 8) {
+                Image(systemName: "plus")
+                    .font(.system(size: 9, weight: .bold))
+                    .foregroundStyle(Theme.dictionaryAccent.opacity(0.9))
+
+                Text(text)
+                    .font(.system(size: 12.5, weight: .medium))
+                    .foregroundStyle(.white.opacity(0.76))
+            }
+            .padding(.horizontal, 13)
+            .frame(height: 31)
+            .background(
+                Capsule(style: .continuous)
+                    .fill(Color.white.opacity(0.045))
+                    .overlay(
+                        Capsule(style: .continuous)
+                            .stroke(Color.white.opacity(0.065), lineWidth: 1)
+                    )
+            )
+        }
+        .buttonStyle(.plain)
+    }
+}
+
+private struct DictionaryAddButtonStyle: ButtonStyle {
+    let isEnabled: Bool
+
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .font(.system(size: 12, weight: .semibold))
+            .foregroundStyle(
+                isEnabled
+                    ? .white.opacity(configuration.isPressed ? 0.84 : 0.96)
+                    : .white.opacity(0.44)
+            )
+            .padding(.horizontal, 14)
+            .frame(height: 34)
+            .background(
+                RoundedRectangle(cornerRadius: 11, style: .continuous)
+                    .fill(
+                        isEnabled
+                            ? Theme.dictionaryAccentFill.opacity(configuration.isPressed ? 0.92 : 1)
+                            : Color.white.opacity(0.04)
+                    )
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 11, style: .continuous)
+                            .stroke(
+                                isEnabled ? Theme.dictionaryAccentStroke : Color.white.opacity(0.06),
+                                lineWidth: 1
+                            )
+                    )
+            )
+            .scaleEffect(configuration.isPressed ? 0.985 : 1)
+            .animation(.easeOut(duration: 0.14), value: configuration.isPressed)
     }
 }
 
