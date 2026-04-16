@@ -207,13 +207,13 @@ private struct DownloadCard: View {
                 }
 
                 VStack(spacing: 12) {
-                    Text("Transcription that lives\non your Mac.")
+                    Text("whisper, pushed to the max")
                         .font(.system(size: 28, weight: .semibold))
                         .tracking(-0.8)
                         .multilineTextAlignment(.center)
                         .foregroundStyle(OnboardingTheme.headlineText)
 
-                    Text("No cloud. No subscription.\nJust your voice to text.")
+                    Text("One model. On your Mac. No subscription.")
                         .font(.system(size: 15, weight: .regular))
                         .multilineTextAlignment(.center)
                         .lineSpacing(3)
