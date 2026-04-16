@@ -83,8 +83,8 @@ final class AppController {
     var onboardingStep: OnboardingStep = .download
     var downloadProgress: Double = 0
     var isDownloading: Bool = false
-    var downloadError: String? = nil
-    var modelSource: ModelSource? = nil
+    var downloadError: String?
+    var modelSource: ModelSource?
 
     private var modelDownloader: ModelDownloader?
 

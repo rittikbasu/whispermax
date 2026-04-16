@@ -43,10 +43,13 @@ final class ModelDownloader: NSObject {
         })
         // Wait up to 2 seconds for the resume data to be written before the process exits
         _ = semaphore.wait(timeout: .now() + 2)
+        session?.invalidateAndCancel()
+        session = nil
     }
 
     func cancel() {
-        downloadTask?.cancel()
+        session?.invalidateAndCancel()
+        session = nil
         downloadTask = nil
         try? FileManager.default.removeItem(at: ModelLocator.downloadResumeDataURL)
     }
@@ -82,6 +85,8 @@ extension ModelDownloader: URLSessionDownloadDelegate {
             try FileManager.default.moveItem(at: location, to: dest)
             // Clean up resume data — download is complete
             try? FileManager.default.removeItem(at: ModelLocator.downloadResumeDataURL)
+            self.session?.finishTasksAndInvalidate()
+            self.session = nil
             DispatchQueue.main.async { self.onComplete?() }
         } catch {
             DispatchQueue.main.async {
