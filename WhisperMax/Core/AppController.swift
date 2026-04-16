@@ -73,23 +73,47 @@ final class AppController {
 
     // MARK: - Onboarding
 
+    enum ModelSource {
+        case ownPath        // already at WhisperMax's canonical path
+        case superwhisper   // found in SuperWhisper, hardlinked across
+        case downloaded     // freshly downloaded from HuggingFace
+    }
+
     var hasCompletedOnboarding: Bool = false
     var onboardingStep: OnboardingStep = .download
     var downloadProgress: Double = 0
     var isDownloading: Bool = false
     var downloadError: String? = nil
+    var modelSource: ModelSource? = nil
 
     private var modelDownloader: ModelDownloader?
 
     var isDownloadComplete: Bool { downloadProgress >= 1.0 }
 
     func startModelSetup() {
-        // Model already on disk (own path or SuperWhisper's) — instant complete
-        if ModelLocator.preferredModelURL() != nil {
+        // Already at our own path
+        if FileManager.default.fileExists(atPath: ModelLocator.appLocalModelURL.path) {
+            modelSource = .ownPath
             downloadProgress = 1.0
             return
         }
 
+        // Found in SuperWhisper — hardlink to our path (instant, zero extra disk space)
+        if FileManager.default.fileExists(atPath: ModelLocator.superwhisperModelURL.path) {
+            do {
+                try FileManager.default.createDirectory(
+                    at: ModelLocator.modelsDirectory, withIntermediateDirectories: true)
+                try FileManager.default.linkItem(
+                    at: ModelLocator.superwhisperModelURL, to: ModelLocator.appLocalModelURL)
+                modelSource = .superwhisper
+                downloadProgress = 1.0
+            } catch {
+                // Different volume — hardlink not possible, fall through to download
+            }
+            if isDownloadComplete { return }
+        }
+
+        // No model found anywhere — download from HuggingFace
         guard !isDownloading else { return }
         isDownloading = true
         downloadProgress = 0
@@ -102,6 +126,7 @@ final class AppController {
             self?.downloadProgress = progress
         }
         downloader.onComplete = { [weak self] in
+            self?.modelSource = .downloaded
             self?.downloadProgress = 1.0
             self?.isDownloading = false
         }

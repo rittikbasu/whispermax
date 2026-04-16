@@ -275,7 +275,12 @@ private struct DownloadCard: View {
 
     private var downloadStatusText: String {
         if controller.downloadError != nil { return "Download failed" }
-        return controller.isDownloadComplete ? "Speech model ready" : "Downloading speech model\u{2026}"
+        if controller.isDownloadComplete {
+            return controller.modelSource == .superwhisper
+                ? "Model found on your Mac"
+                : "Speech model ready"
+        }
+        return "Downloading speech model\u{2026}"
     }
 
     private var downloadSizeText: String {
