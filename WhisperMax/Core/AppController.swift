@@ -12,6 +12,7 @@ private enum WaveformHistory {
 enum InsertionMethod: String, Codable, Equatable {
     case accessibility = "Direct Insert"
     case clipboard = "Clipboard Fallback"
+    case copied = "Copied to Clipboard"
 }
 
 enum RecordingPhase: Equatable {
@@ -449,8 +450,15 @@ final class AppController {
             return "Listening…"
         case .transcribing:
             return "Transcribing locally…"
-        case .inserted:
-            return "Inserted into your app"
+        case .inserted(let method):
+            switch method {
+            case .accessibility:
+                return "Inserted into your app"
+            case .clipboard:
+                return "Pasted into your app"
+            case .copied:
+                return "Copied to clipboard"
+            }
         case .error(let issue):
             return issue.statusMessage
         }
@@ -634,10 +642,8 @@ final class AppController {
     }
 
     func reinsert(_ entry: TranscriptEntry) {
-        do {
-            _ = try insertionService.insert(entry.text)
-        } catch {
-            setError("Failed to reinsert transcript.")
+        Task { @MainActor in
+            _ = await insertionService.insert(entry.text)
         }
     }
 
@@ -808,7 +814,7 @@ final class AppController {
                 return
             }
 
-            let insertionMethod = try insertionService.insert(cleaned, target: pendingInsertionTarget)
+            let insertionMethod = await insertionService.insert(cleaned, target: pendingInsertionTarget)
             lastTranscript = cleaned
 
             let entry = TranscriptEntry(
@@ -823,9 +829,14 @@ final class AppController {
             history.insert(entry, at: 0)
             historyStore.save(history)
 
-            statusText = insertionMethod == .accessibility
-                ? "Inserted directly."
-                : "Pasted and restored clipboard."
+            switch insertionMethod {
+            case .accessibility:
+                statusText = "Inserted directly."
+            case .clipboard:
+                statusText = "Pasted and restored clipboard."
+            case .copied:
+                statusText = "Copied to clipboard."
+            }
             phase = .inserted(insertionMethod)
             transitionToReady(after: 0.9)
         } catch {

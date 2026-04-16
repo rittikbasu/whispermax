@@ -151,7 +151,7 @@ private struct RecorderControlRail: View {
         case .transcribing:
             RecorderStateLabel(title: "Transcribing")
         case .inserted(let method):
-            RecorderStateLabel(title: method == .accessibility ? "Inserted" : "Pasted")
+            RecorderStateLabel(title: insertedTitle(for: method))
         case .error(let issue):
             RecorderStateLabel(title: issue.title, subtitle: issue.subtitle)
         case .loadingModel:
@@ -178,6 +178,17 @@ private struct RecorderControlRail: View {
         case .inserted: RecorderTheme.statusInserted
         case .error: Color(red: 0.93, green: 0.38, blue: 0.34)
         default: Color.white.opacity(0.24)
+        }
+    }
+
+    private func insertedTitle(for method: InsertionMethod) -> String {
+        switch method {
+        case .accessibility:
+            return "Inserted"
+        case .clipboard:
+            return "Pasted"
+        case .copied:
+            return "Copied to Clipboard"
         }
     }
 }
