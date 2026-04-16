@@ -20,7 +20,48 @@ enum RecordingPhase: Equatable {
     case recording
     case transcribing
     case inserted(InsertionMethod)
-    case error(String)
+    case error(RecorderIssue)
+}
+
+enum RecorderIssue: Equatable {
+    case microphonePermissionRequired
+    case generic(String)
+
+    var statusMessage: String {
+        switch self {
+        case .microphonePermissionRequired:
+            return "Microphone access is required for local dictation."
+        case .generic(let message):
+            return message
+        }
+    }
+
+    var title: String {
+        switch self {
+        case .microphonePermissionRequired:
+            return "Microphone access needed"
+        case .generic:
+            return "Try again"
+        }
+    }
+
+    var subtitle: String? {
+        switch self {
+        case .microphonePermissionRequired:
+            return nil
+        case .generic:
+            return "Recorder reset"
+        }
+    }
+
+    var autoDismissDelay: TimeInterval {
+        switch self {
+        case .microphonePermissionRequired:
+            return 4.2
+        case .generic:
+            return 1.8
+        }
+    }
 }
 
 enum OnboardingStep: Int, CaseIterable {
@@ -410,8 +451,8 @@ final class AppController {
             return "Transcribing locally…"
         case .inserted:
             return "Inserted into your app"
-        case .error(let message):
-            return message
+        case .error(let issue):
+            return issue.statusMessage
         }
     }
 
@@ -520,7 +561,7 @@ final class AppController {
 
             microphoneGranted = await permissionsManager.requestMicrophoneAccess()
             guard microphoneGranted else {
-                setError("Microphone access is required for local dictation.")
+                setRecorderIssue(.microphonePermissionRequired)
                 return
             }
 
@@ -818,9 +859,15 @@ final class AppController {
     }
 
     private func setError(_ message: String) {
-        statusText = message
-        phase = .error(message)
-        transitionToReady(after: 1.8)
+        setRecorderIssue(.generic(message))
+    }
+
+    private func setRecorderIssue(_ issue: RecorderIssue) {
+        statusText = issue.statusMessage
+        phase = .error(issue)
+        recordingDuration = 0
+        resetWaveform(active: false)
+        transitionToReady(after: issue.autoDismissDelay)
     }
 
     private func transitionToReady(after delay: TimeInterval) {

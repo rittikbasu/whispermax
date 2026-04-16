@@ -23,7 +23,8 @@ struct RecorderPanelView: View {
             let outerVerticalPadding: CGFloat = 8
             let cornerRadius = min(max(proxy.size.height * 0.14, 20), 24)
             let contentHeight = proxy.size.height - (outerVerticalPadding * 2)
-            let waveHeight = max(92, contentHeight * 0.58)
+            let railHeight: CGFloat = 60
+            let waveHeight = max(92, contentHeight - railHeight - 1)
 
             ZStack {
                 RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
@@ -62,6 +63,8 @@ struct RecorderPanelView: View {
                         phase: controller.phase,
                         duration: controller.formattedDuration,
                         hotkeyText: controller.hotkeyDisplay,
+                        height: railHeight,
+                        openMicrophoneSettings: controller.openMicrophoneSettings,
                         stop: controller.stopRecording,
                         cancel: controller.cancelRecording
                     )
@@ -98,13 +101,6 @@ private struct RecorderWaveStage: View {
                 .padding(.top, 12)
                 .padding(.bottom, 10)
         }
-        .overlay(alignment: .topTrailing) {
-            Image(systemName: "arrow.up.left.and.arrow.down.right")
-                .font(.system(size: 10, weight: .semibold))
-                .foregroundStyle(.white.opacity(0.13))
-                .padding(.top, 12)
-                .padding(.trailing, 14)
-        }
     }
 }
 
@@ -112,31 +108,32 @@ private struct RecorderControlRail: View {
     let phase: RecordingPhase
     let duration: String
     let hotkeyText: String
+    let height: CGFloat
+    let openMicrophoneSettings: () -> Void
     let stop: () -> Void
     let cancel: () -> Void
 
     var body: some View {
-        HStack(spacing: 12) {
-            RecorderStatusDot(color: statusDotColor, isRecording: phase == .recording)
-
-            leadContent
-
-            Spacer(minLength: 18)
-
-            RecorderActionStrip(stop: stop, cancel: cancel)
-                .opacity(showsActionStrip ? 1 : 0)
-                .allowsHitTesting(showsActionStrip)
-                .accessibilityHidden(!showsActionStrip)
-        }
-        .padding(.horizontal, 16)
-        .padding(.vertical, 11)
-        .background(
+        ZStack {
             LinearGradient(
                 colors: [RecorderTheme.railTop, RecorderTheme.railBottom],
                 startPoint: .top,
                 endPoint: .bottom
             )
-        )
+
+            HStack(spacing: 12) {
+                RecorderStatusDot(color: statusDotColor, isRecording: phase == .recording)
+
+                leadContent
+
+                Spacer(minLength: 18)
+
+                trailingContent
+            }
+            .padding(.horizontal, 16)
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
+        }
+        .frame(height: height)
     }
 
     @ViewBuilder
@@ -155,10 +152,22 @@ private struct RecorderControlRail: View {
             RecorderStateLabel(title: "Transcribing")
         case .inserted(let method):
             RecorderStateLabel(title: method == .accessibility ? "Inserted" : "Pasted")
-        case .error:
-            RecorderStateLabel(title: "Try again", subtitle: "Recorder reset")
+        case .error(let issue):
+            RecorderStateLabel(title: issue.title, subtitle: issue.subtitle)
         case .loadingModel:
             RecorderStateLabel(title: "Loading model", subtitle: "Preparing local engine")
+        }
+    }
+
+    @ViewBuilder
+    private var trailingContent: some View {
+        switch phase {
+        case .recording:
+            RecorderActionStrip(stop: stop, cancel: cancel)
+        case .error(.microphonePermissionRequired):
+            RecorderRecoveryStrip(title: "Grant Access", action: openMicrophoneSettings)
+        default:
+            EmptyView()
         }
     }
 
@@ -170,13 +179,6 @@ private struct RecorderControlRail: View {
         case .error: Color(red: 0.93, green: 0.38, blue: 0.34)
         default: Color.white.opacity(0.24)
         }
-    }
-
-    private var showsActionStrip: Bool {
-        if case .recording = phase {
-            return true
-        }
-        return false
     }
 }
 
@@ -224,8 +226,8 @@ private struct RecorderStateLabel: View {
     var body: some View {
         VStack(alignment: .leading, spacing: subtitle == nil ? 0 : 2) {
             Text(title)
-                .font(.system(size: 14, weight: .semibold))
-                .foregroundStyle(.white.opacity(0.90))
+                .font(.system(size: 16, weight: .semibold))
+                .foregroundStyle(.white.opacity(0.94))
 
             if let subtitle {
                 Text(subtitle)
@@ -255,6 +257,46 @@ private struct RecorderActionStrip: View {
             RecorderKeyBadge(text: "Esc")
         }
         .frame(height: 38)
+    }
+}
+
+private struct RecorderRecoveryStrip: View {
+    let title: String
+    let action: () -> Void
+
+    var body: some View {
+        Button(title, action: action)
+            .buttonStyle(RecorderRecoveryButtonStyle())
+            .frame(height: 38)
+    }
+}
+
+private struct RecorderRecoveryButtonStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .font(.system(size: 14, weight: .semibold))
+            .foregroundStyle(.white.opacity(0.94))
+            .padding(.horizontal, 14)
+            .padding(.vertical, 8)
+            .background(
+                Capsule(style: .continuous)
+                    .fill(
+                        LinearGradient(
+                            colors: [
+                                Color.white.opacity(configuration.isPressed ? 0.13 : 0.10),
+                                Color.white.opacity(configuration.isPressed ? 0.07 : 0.045),
+                            ],
+                            startPoint: .top,
+                            endPoint: .bottom
+                        )
+                    )
+                    .overlay(
+                        Capsule(style: .continuous)
+                            .stroke(Color.white.opacity(configuration.isPressed ? 0.16 : 0.12), lineWidth: 1)
+                    )
+            )
+            .scaleEffect(configuration.isPressed ? 0.98 : 1)
+            .animation(.easeOut(duration: 0.12), value: configuration.isPressed)
     }
 }
 
