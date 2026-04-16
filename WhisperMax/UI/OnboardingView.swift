@@ -55,7 +55,17 @@ private struct StyledAppName: View {
 
 // MARK: - Window Resizer
 
+private final class OnboardingWindowDelegate: NSObject, NSWindowDelegate {
+    func windowShouldZoom(_ window: NSWindow, toFrame newFrame: NSRect) -> Bool { false }
+    func window(_ window: NSWindow, willUseFullScreenPresentationOptions proposedOptions: NSApplication.PresentationOptions) -> NSApplication.PresentationOptions { [] }
+    func windowWillEnterFullScreen(_ notification: Notification) {
+        (notification.object as? NSWindow)?.toggleFullScreen(nil)
+    }
+}
+
 private struct OnboardingWindowResizer: NSViewRepresentable {
+    func makeCoordinator() -> OnboardingWindowDelegate { OnboardingWindowDelegate() }
+
     func makeNSView(context: Context) -> NSView {
         let view = NSView()
         DispatchQueue.main.async {
@@ -78,13 +88,10 @@ private struct OnboardingWindowResizer: NSViewRepresentable {
 
             window.styleMask.remove(.resizable)
             window.styleMask.remove(.miniaturizable)
+            // Replace entirely — insert/remove fights SwiftUI's own collection behavior
+            window.collectionBehavior = .fullScreenNone
 
-            window.collectionBehavior.remove(.fullScreenPrimary)
-            window.collectionBehavior.insert(.fullScreenNone)
-            if let zoomButton = window.standardWindowButton(.zoomButton) {
-                zoomButton.isEnabled = false
-                zoomButton.alphaValue = 0.5
-            }
+            window.delegate = context.coordinator
         }
         return view
     }
