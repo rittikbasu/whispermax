@@ -8,12 +8,17 @@ settings:
   base:
     PRODUCT_NAME: whispermax
     PRODUCT_BUNDLE_IDENTIFIER: com.whispermax.app
+    MARKETING_VERSION: 0.1.0
+    CURRENT_PROJECT_VERSION: 1
+    VERSIONING_SYSTEM: apple-generic
     CODE_SIGN_ENTITLEMENTS: WhisperMax/WhisperMax.entitlements
     SWIFT_VERSION: 6.0
     MACOSX_DEPLOYMENT_TARGET: "14.0"
     ENABLE_DEBUG_DYLIB: NO
     GENERATE_INFOPLIST_FILE: YES
     INFOPLIST_KEY_CFBundleDisplayName: whispermax
+    INFOPLIST_KEY_CFBundleShortVersionString: $(MARKETING_VERSION)
+    INFOPLIST_KEY_CFBundleVersion: $(CURRENT_PROJECT_VERSION)
     INFOPLIST_KEY_LSUIElement: YES
     INFOPLIST_KEY_NSMicrophoneUsageDescription: whispermax records your voice for local transcription.
     INFOPLIST_KEY_NSAccessibilityUsageDescription: whispermax needs Accessibility access to insert transcriptions into other apps.
