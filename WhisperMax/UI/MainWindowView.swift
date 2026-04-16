@@ -262,19 +262,8 @@ private struct PermissionSetupPanel: View {
                     subtitle: controller.accessibilityGranted ? "Ready" : "Required for direct insertion into other apps",
                     isGranted: controller.accessibilityGranted,
                     buttonTitle: "Open Accessibility Settings",
-                    action: controller.openAccessibilitySettings
+                    action: controller.beginAccessibilityPermissionFlow
                 )
-            }
-
-            HStack(spacing: 10) {
-                if !controller.accessibilityGranted {
-                    Button("Prompt Accessibility Again", action: controller.promptForAccessibility)
-                        .buttonStyle(PanelButtonStyle(prominent: false))
-                }
-                Button("Refresh Permissions", action: controller.refreshPermissions)
-                    .buttonStyle(PanelButtonStyle(prominent: false))
-                Spacer()
-                HotkeyBadge(text: controller.hotkeyDisplay)
             }
         }
         .padding(.horizontal, 20)

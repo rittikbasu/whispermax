@@ -7,90 +7,108 @@ struct MenuBarView: View {
 
     var body: some View {
         Group {
-            Button(controller.menuPrimaryActionTitle) {
-                Task {
-                    await controller.toggleRecording()
+            if controller.hasCompletedOnboarding {
+                Button(controller.menuPrimaryActionTitle) {
+                    Task {
+                        await controller.toggleRecording()
+                    }
                 }
-            }
-            .disabled(!controller.isMenuPrimaryActionEnabled)
+                .disabled(!controller.isMenuPrimaryActionEnabled)
 
-            Button("Copy Last Transcript") {
-                controller.copyLastTranscript()
-            }
-            .disabled(!controller.canCopyLastTranscript)
+                Button("Copy Last Transcript") {
+                    controller.copyLastTranscript()
+                }
+                .disabled(!controller.canCopyLastTranscript)
 
-            if let menuFeedbackMessage = controller.menuFeedbackMessage {
                 Divider()
 
-                Text(menuFeedbackMessage)
-            }
-
-            Divider()
-
-            Button("History") {
-                controller.sidebarSelection = .history
-                openMainWindow()
-            }
-
-            Button("Settings") {
-                controller.sidebarSelection = .settings
-                openMainWindow()
-            }
-
-            Menu {
-                if controller.inputDevices.isEmpty {
-                    Text("No input devices available")
-                } else {
-                    Button {
-                        controller.useSystemDefaultInput()
-                    } label: {
-                        if controller.prefersSystemDefaultInput {
-                            Label(systemDefaultMenuItemTitle, systemImage: "checkmark")
-                        } else {
-                            Text(systemDefaultMenuItemTitle)
-                        }
-                    }
-
-                    if let unavailablePinnedInput = controller.unavailablePinnedInput {
-                        Divider()
-                        Text("\(unavailablePinnedInput.name) unavailable")
-                    }
+                if let menuFeedbackMessage = controller.menuFeedbackMessage {
+                    Text(menuFeedbackMessage)
 
                     Divider()
+                }
 
-                    ForEach(controller.inputDevices) { device in
+                Button("History") {
+                    controller.sidebarSelection = .history
+                    openMainWindow()
+                }
+
+                Button("Settings") {
+                    controller.sidebarSelection = .settings
+                    openMainWindow()
+                }
+
+                Menu {
+                    if controller.inputDevices.isEmpty {
+                        Text("No input devices available")
+                    } else {
                         Button {
-                            controller.pinInputDevice(device)
+                            controller.useSystemDefaultInput()
                         } label: {
-                            if controller.isPreferredInput(device) {
-                                Label(device.name, systemImage: "checkmark")
+                            if controller.prefersSystemDefaultInput {
+                                Label(systemDefaultMenuItemTitle, systemImage: "checkmark")
                             } else {
-                                Text(device.name)
+                                Text(systemDefaultMenuItemTitle)
+                            }
+                        }
+
+                        if let unavailablePinnedInput = controller.unavailablePinnedInput {
+                            Divider()
+                            Text("\(unavailablePinnedInput.name) unavailable")
+                        }
+
+                        Divider()
+
+                        ForEach(controller.inputDevices) { device in
+                            Button {
+                                controller.pinInputDevice(device)
+                            } label: {
+                                if controller.isPreferredInput(device) {
+                                    Label(device.name, systemImage: "checkmark")
+                                } else {
+                                    Text(device.name)
+                                }
                             }
                         }
                     }
+                } label: {
+                    Text(controller.inputMenuLabel)
                 }
-            } label: {
-                Text(controller.inputMenuLabel)
-            }
 
-            if !controller.accessibilityGranted {
+                if !controller.accessibilityGranted {
+                    Divider()
+
+                    Button("Prompt Accessibility Access") {
+                        controller.promptForAccessibility()
+                    }
+                }
+
                 Divider()
 
-                Button("Prompt Accessibility Access") {
-                    controller.promptForAccessibility()
+                Button("Quit whispermax") {
+                    NSApp.terminate(nil)
                 }
-            }
+            } else {
+                Button(onboardingPrimaryActionTitle) {
+                    openMainWindow()
+                }
 
-            Divider()
+                Divider()
 
-            Button("Quit whispermax") {
-                NSApp.terminate(nil)
+                Button("Quit whispermax") {
+                    NSApp.terminate(nil)
+                }
             }
         }
         .onAppear {
-            controller.refreshInputDevices()
+            if controller.hasCompletedOnboarding {
+                controller.refreshInputDevices()
+            }
         }
+    }
+
+    private var onboardingPrimaryActionTitle: String {
+        controller.onboardingMode == .modelRepair ? "Repair Model" : "Continue Setup"
     }
 
     private var systemDefaultMenuItemTitle: String {

@@ -29,6 +29,11 @@ enum OnboardingStep: Int, CaseIterable {
     case ready
 }
 
+enum OnboardingMode: Equatable {
+    case full
+    case modelRepair
+}
+
 enum SidebarSelection: String, CaseIterable {
     case home
     case history
@@ -57,9 +62,9 @@ final class AppController {
     private var whisperEngine: WhisperEngine?
     private var preRecordingSystemDefaultInputDeviceID: AudioObjectID?
     private var recordingPinnedDeviceID: AudioObjectID?
-    private var permissionRefreshTask: Task<Void, Never>?
+    private var permissionMonitorTask: Task<Void, Never>?
+    private var accessibilityNotificationObserver: NSObjectProtocol?
     private var menuFeedbackResetTask: Task<Void, Never>?
-    private var hasPromptedAccessibilityThisLaunch = false
     private var pendingInsertionTarget: InsertionTargetContext?
 
     var phase: RecordingPhase = .loadingModel {
@@ -79,22 +84,75 @@ final class AppController {
         case downloaded     // freshly downloaded from HuggingFace
     }
 
+    private enum ModelSetupState: Equatable {
+        case idle
+        case downloading(Double)
+        case ready(ModelSource)
+        case failed(String)
+    }
+
     var hasCompletedOnboarding: Bool = false
+    var onboardingMode: OnboardingMode = .full
     var onboardingStep: OnboardingStep = .download
-    var downloadProgress: Double = 0
-    var isDownloading: Bool = false
-    var downloadError: String?
-    var modelSource: ModelSource?
+    private var modelSetupState: ModelSetupState = .idle
 
     private var modelDownloader: ModelDownloader?
 
-    var isDownloadComplete: Bool { downloadProgress >= 1.0 }
+    var onboardingSteps: [OnboardingStep] {
+        onboardingMode == .modelRepair ? [.download] : OnboardingStep.allCases
+    }
+
+    var downloadProgress: Double {
+        switch modelSetupState {
+        case .downloading(let progress):
+            return progress
+        case .ready:
+            return 1.0
+        case .idle, .failed:
+            return 0
+        }
+    }
+
+    var isDownloading: Bool {
+        if case .downloading = modelSetupState {
+            return true
+        }
+        return false
+    }
+
+    var downloadError: String? {
+        if case .failed(let message) = modelSetupState {
+            return message
+        }
+        return nil
+    }
+
+    var modelSource: ModelSource? {
+        if case .ready(let source) = modelSetupState {
+            return source
+        }
+        return nil
+    }
+
+    var isDownloadComplete: Bool {
+        if case .ready = modelSetupState {
+            return true
+        }
+        return false
+    }
 
     func startModelSetup() {
+        if case .downloading = modelSetupState {
+            return
+        }
+
+        if case .ready = modelSetupState, hasUsableModelAvailable {
+            return
+        }
+
         // Already at our own path
         if FileManager.default.fileExists(atPath: ModelLocator.appLocalModelURL.path) {
-            modelSource = .ownPath
-            downloadProgress = 1.0
+            markModelSetupReady(.ownPath)
             return
         }
 
@@ -105,8 +163,7 @@ final class AppController {
                     at: ModelLocator.modelsDirectory, withIntermediateDirectories: true)
                 try FileManager.default.linkItem(
                     at: ModelLocator.superwhisperModelURL, to: ModelLocator.appLocalModelURL)
-                modelSource = .superwhisper
-                downloadProgress = 1.0
+                markModelSetupReady(.superwhisper)
             } catch {
                 // Different volume — hardlink not possible, fall through to download
             }
@@ -114,25 +171,21 @@ final class AppController {
         }
 
         // No model found anywhere — download from HuggingFace
-        guard !isDownloading else { return }
-        isDownloading = true
-        downloadProgress = 0
-        downloadError = nil
+        beginModelDownload()
 
         let downloader = ModelDownloader()
         modelDownloader = downloader
 
         downloader.onProgress = { [weak self] progress in
-            self?.downloadProgress = progress
+            self?.modelSetupState = .downloading(progress)
         }
         downloader.onComplete = { [weak self] in
-            self?.modelSource = .downloaded
-            self?.downloadProgress = 1.0
-            self?.isDownloading = false
+            self?.modelDownloader = nil
+            self?.markModelSetupReady(.downloaded)
         }
         downloader.onError = { [weak self] message in
-            self?.isDownloading = false
-            self?.downloadError = message
+            self?.modelDownloader = nil
+            self?.modelSetupState = .failed(message)
         }
 
         downloader.start()
@@ -141,6 +194,7 @@ final class AppController {
     func retryDownload() {
         modelDownloader?.cancel()
         modelDownloader = nil
+        modelSetupState = .idle
         startModelSetup()
     }
 
@@ -149,6 +203,11 @@ final class AppController {
     }
 
     func advanceOnboarding() {
+        if onboardingMode == .modelRepair, onboardingStep == .download, isDownloadComplete {
+            completeOnboarding()
+            return
+        }
+
         guard let nextIndex = OnboardingStep(rawValue: onboardingStep.rawValue + 1) else {
             completeOnboarding()
             return
@@ -157,7 +216,14 @@ final class AppController {
     }
 
     func completeOnboarding() {
+        guard hasUsableModelAvailable else {
+            enterModelRepairMode()
+            startModelSetup()
+            return
+        }
+
         hasCompletedOnboarding = true
+        onboardingMode = .full
         FileManager.default.createFile(
             atPath: ModelLocator.onboardingCompleteFileURL.path,
             contents: nil
@@ -171,9 +237,18 @@ final class AppController {
     }
 
     func loadOnboardingState() {
-        hasCompletedOnboarding = FileManager.default.fileExists(
+        let hasSentinel = FileManager.default.fileExists(
             atPath: ModelLocator.onboardingCompleteFileURL.path
         )
+        let hasUsableModel = hasUsableModelAvailable
+
+        hasCompletedOnboarding = hasSentinel && hasUsableModel
+        onboardingMode = hasSentinel && !hasUsableModel ? .modelRepair : .full
+        onboardingStep = .download
+
+        if !hasCompletedOnboarding {
+            modelSetupState = .idle
+        }
     }
 
     // MARK: - Main State
@@ -202,6 +277,7 @@ final class AppController {
     init() {
         configureRecorderCallbacks()
         configureInputDeviceObservation()
+        configurePermissionObservation()
     }
 
     var filteredHistory: [TranscriptEntry] {
@@ -352,6 +428,7 @@ final class AppController {
         history = historyStore.load().sorted { $0.createdAt > $1.createdAt }
         refreshInputDevices()
         refreshPermissions()
+        startPermissionMonitoring()
         statusText = idleStatusText
 
         guard hasCompletedOnboarding else { return }
@@ -363,27 +440,17 @@ final class AppController {
     }
 
     func refreshPermissions() {
-        permissionRefreshTask?.cancel()
-        accessibilityGranted = permissionsManager.isAccessibilityGranted
-        microphoneGranted = permissionsManager.isMicrophoneGranted
-
-        guard phase != .recording, phase != .transcribing else {
-            return
-        }
-
-        statusText = idleStatusText
-
-        if !accessibilityGranted {
-            permissionRefreshTask = Task { @MainActor [weak self] in
-                await self?.pollAccessibilityPermission()
-            }
-        }
+        syncPermissionState()
     }
 
     func promptForAccessibility() {
-        hasPromptedAccessibilityThisLaunch = true
         permissionsManager.promptForAccessibility()
         refreshPermissions()
+    }
+
+    func beginAccessibilityPermissionFlow() {
+        promptForAccessibility()
+        openAccessibilitySettings()
     }
 
     func refreshInputDevices() {
@@ -455,10 +522,6 @@ final class AppController {
             guard microphoneGranted else {
                 setError("Microphone access is required for local dictation.")
                 return
-            }
-
-            if !accessibilityGranted {
-                promptForAccessibility()
             }
 
             do {
@@ -563,6 +626,31 @@ final class AppController {
         }
     }
 
+    private func configurePermissionObservation() {
+        accessibilityNotificationObserver = DistributedNotificationCenter.default().addObserver(
+            forName: NSNotification.Name("com.apple.accessibility.api"),
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                self?.syncPermissionState()
+            }
+        }
+    }
+
+    private func startPermissionMonitoring() {
+        guard permissionMonitorTask == nil else {
+            return
+        }
+
+        permissionMonitorTask = Task { @MainActor [weak self] in
+            while !Task.isCancelled {
+                self?.syncPermissionState()
+                try? await Task.sleep(for: .milliseconds(1500))
+            }
+        }
+    }
+
     private func prepareInputDeviceForRecording() {
         refreshInputDevices()
         preRecordingSystemDefaultInputDeviceID = nil
@@ -631,7 +719,8 @@ final class AppController {
 
     private func preloadModel() async {
         guard let modelURL = ModelLocator.preferredModelURL() else {
-            setError("No local Whisper model was found. Place ggml-large-v3-turbo.bin in Application Support/WhisperMax/Models or keep Superwhisper installed.")
+            enterModelRepairMode()
+            startModelSetup()
             return
         }
 
@@ -655,13 +744,6 @@ final class AppController {
         }
 
         refreshPermissions()
-
-        if !accessibilityGranted && !hasPromptedAccessibilityThisLaunch {
-            hasPromptedAccessibilityThisLaunch = true
-            try? await Task.sleep(for: .milliseconds(450))
-            permissionsManager.promptForAccessibility()
-            refreshPermissions()
-        }
     }
 
     private func transcribeAndInsert(from url: URL) async {
@@ -764,29 +846,15 @@ final class AppController {
         return whisperEngine == nil ? "Loading local model..." : "Ready when you are"
     }
 
-    private func pollAccessibilityPermission() async {
-        let delays: [Duration] = [
-            .milliseconds(250),
-            .milliseconds(800),
-            .milliseconds(1600),
-            .milliseconds(3000),
-            .milliseconds(4500),
-        ]
+    private func syncPermissionState() {
+        accessibilityGranted = permissionsManager.isAccessibilityGranted
+        microphoneGranted = permissionsManager.isMicrophoneGranted
 
-        for delay in delays {
-            try? await Task.sleep(for: delay)
-
-            guard !Task.isCancelled else {
-                return
-            }
-
-            let isGranted = permissionsManager.isAccessibilityGranted
-            if isGranted {
-                accessibilityGranted = true
-                statusText = idleStatusText
-                return
-            }
+        guard phase != .recording, phase != .transcribing else {
+            return
         }
+
+        statusText = idleStatusText
     }
 
     private func setMenuFeedback(_ message: String) {
@@ -805,6 +873,30 @@ final class AppController {
                 self.menuFeedbackMessage = nil
             }
         }
+    }
+
+    private var hasUsableModelAvailable: Bool {
+        ModelLocator.preferredModelURL() != nil
+    }
+
+    private func beginModelDownload() {
+        modelSetupState = .downloading(0)
+    }
+
+    private func markModelSetupReady(_ source: ModelSource) {
+        modelDownloader = nil
+        try? FileManager.default.removeItem(at: ModelLocator.downloadResumeDataURL)
+        modelSetupState = .ready(source)
+    }
+
+    private func enterModelRepairMode() {
+        hasCompletedOnboarding = false
+        onboardingMode = .modelRepair
+        onboardingStep = .download
+        modelSetupState = .idle
+        whisperEngine = nil
+        phase = .loadingModel
+        statusText = "Speech model needs to be set up again."
     }
 
     private var transcriptToCopy: String? {

@@ -1,5 +1,4 @@
 import AppKit
-import ApplicationServices
 import SwiftUI
 
 // MARK: - Theme
@@ -111,6 +110,7 @@ struct OnboardingWindowRestorer: NSViewRepresentable {
             if let zoomButton = window.standardWindowButton(.zoomButton) {
                 zoomButton.isEnabled = true
             }
+            window.delegate = nil
 
             if let screen = window.screen ?? NSScreen.main {
                 let screenFrame = screen.visibleFrame
@@ -129,6 +129,7 @@ struct OnboardingWindowRestorer: NSViewRepresentable {
 
 struct OnboardingView: View {
     @Environment(AppController.self) private var controller
+    @State private var transitionDirection: SlideDirection = .forward
 
     var body: some View {
         ZStack {
@@ -137,19 +138,16 @@ struct OnboardingView: View {
             VStack(spacing: 0) {
                 Spacer().frame(height: 44)
 
-                StepIndicator(current: controller.onboardingStep)
+                StepIndicator(
+                    steps: controller.onboardingSteps,
+                    current: controller.onboardingStep
+                )
                     .padding(.bottom, 32)
 
-                ZStack {
-                    DownloadCard()
-                        .cardTransition(isActive: controller.onboardingStep == .download, direction: .backward)
-
-                    PermissionsCard()
-                        .cardTransition(isActive: controller.onboardingStep == .permissions, direction: controller.onboardingStep.rawValue > OnboardingStep.permissions.rawValue ? .backward : .forward)
-
-                    ReadyCard()
-                        .cardTransition(isActive: controller.onboardingStep == .ready, direction: .forward)
-                }
+                OnboardingCardStage(
+                    step: controller.onboardingStep,
+                    direction: transitionDirection
+                )
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .clipped()
 
@@ -160,27 +158,72 @@ struct OnboardingView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(OnboardingWindowResizer())
         .onAppear {
+            transitionDirection = .forward
             controller.startModelSetup()
         }
+        .onChange(of: controller.onboardingStep) { oldValue, newValue in
+            transitionDirection = newValue.rawValue >= oldValue.rawValue ? .forward : .backward
+        }
+    }
+}
+
+private struct OnboardingCardStage: View {
+    let step: OnboardingStep
+    let direction: SlideDirection
+
+    var body: some View {
+        ZStack {
+            cardView
+                .id(step)
+                .transition(cardTransition)
+        }
+        .animation(OnboardingTheme.slideSpring, value: step)
+    }
+
+    @ViewBuilder
+    private var cardView: some View {
+        switch step {
+        case .download:
+            DownloadCard()
+        case .permissions:
+            PermissionsCard()
+        case .ready:
+            ReadyCard()
+        }
+    }
+
+    private var cardTransition: AnyTransition {
+        let insertionEdge: Edge = direction == .forward ? .trailing : .leading
+        let removalEdge: Edge = direction == .forward ? .leading : .trailing
+
+        return .asymmetric(
+            insertion: .move(edge: insertionEdge).combined(with: .opacity),
+            removal: .move(edge: removalEdge).combined(with: .opacity)
+        )
     }
 }
 
 // MARK: - Step Indicator
 
 private struct StepIndicator: View {
+    let steps: [OnboardingStep]
     let current: OnboardingStep
 
     var body: some View {
         HStack(spacing: 8) {
-            ForEach(OnboardingStep.allCases, id: \.rawValue) { step in
+            ForEach(Array(steps.enumerated()), id: \.offset) { index, step in
                 Capsule(style: .continuous)
-                    .fill(step.rawValue <= current.rawValue
+                    .fill(index <= currentIndex
                           ? OnboardingTheme.progressFill
                           : OnboardingTheme.progressTrack)
-                    .frame(width: step == current ? 28 : 8, height: 4)
+                    .frame(width: index == currentIndex ? 28 : 8, height: 4)
                     .animation(.spring(response: 0.4, dampingFraction: 0.8), value: current)
             }
         }
+    }
+
+    private var currentIndex: Int {
+        steps.firstIndex(of: current) ?? 0
     }
 }
 
@@ -190,7 +233,6 @@ private struct DownloadCard: View {
     @Environment(AppController.self) private var controller
 
     @State private var headlineVisible = false
-    @State private var bodyVisible = false
     @State private var progressVisible = false
 
     var body: some View {
@@ -331,8 +373,6 @@ private struct PermissionsCard: View {
     @State private var headerVisible = false
     @State private var micCardVisible = false
     @State private var accessCardVisible = false
-    @State private var pollingTask: Task<Void, Never>?
-    @State private var notificationObserver: NSObjectProtocol?
 
     private var micGranted: Bool { controller.microphoneGranted }
     private var accessGranted: Bool { controller.accessibilityGranted }
@@ -380,10 +420,7 @@ private struct PermissionsCard: View {
                     isGranted: accessGranted,
                     isActive: micGranted,
                     buttonTitle: "Open Settings",
-                    action: {
-                        controller.permissionsManager.promptForAccessibility()
-                        controller.openAccessibilitySettings()
-                    }
+                    action: controller.beginAccessibilityPermissionFlow
                 )
                 .opacity(accessCardVisible ? 1 : 0)
                 .offset(y: accessCardVisible ? 0 : 10)
@@ -408,37 +445,6 @@ private struct PermissionsCard: View {
             }
             withAnimation(OnboardingTheme.contentAppear.delay(0.35)) {
                 accessCardVisible = true
-            }
-            startPermissionMonitoring()
-        }
-        .onDisappear {
-            pollingTask?.cancel()
-            if let observer = notificationObserver {
-                DistributedNotificationCenter.default().removeObserver(observer)
-            }
-        }
-    }
-
-    private func checkAccessibility() {
-        let granted = AXIsProcessTrusted()
-        if granted != controller.accessibilityGranted {
-            controller.accessibilityGranted = granted
-        }
-    }
-
-    private func startPermissionMonitoring() {
-        notificationObserver = DistributedNotificationCenter.default().addObserver(
-            forName: NSNotification.Name("com.apple.accessibility.api"),
-            object: nil,
-            queue: .main
-        ) { _ in
-            checkAccessibility()
-        }
-
-        pollingTask = Task { @MainActor in
-            while !Task.isCancelled {
-                try? await Task.sleep(for: .milliseconds(1500))
-                checkAccessibility()
             }
         }
     }
@@ -525,6 +531,7 @@ private struct ReadyCard: View {
     @State private var instructionVisible = false
     @State private var buttonVisible = false
     @State private var keycapPressed = false
+    @State private var keycapLoopTask: Task<Void, Never>?
 
     var body: some View {
         VStack(spacing: 0) {
@@ -537,7 +544,7 @@ private struct ReadyCard: View {
 
                 VStack(spacing: 10) {
                     HStack(spacing: 6) {
-                        Text("Hold")
+                        Text("Press")
                             .foregroundStyle(OnboardingTheme.headlineText)
                         Text("\u{2325} Space")
                             .foregroundStyle(.white)
@@ -545,9 +552,10 @@ private struct ReadyCard: View {
                     .font(.system(size: 26, weight: .semibold))
                     .tracking(-0.5)
 
-                    Text("to start dictating. Release to transcribe.")
+                    Text("to start dictating. Press it again to stop and transcribe.")
                         .font(.system(size: 15, weight: .regular))
                         .foregroundStyle(OnboardingTheme.bodyText)
+                        .multilineTextAlignment(.center)
                 }
                 .opacity(instructionVisible ? 1 : 0)
                 .offset(y: instructionVisible ? 0 : 10)
@@ -582,10 +590,16 @@ private struct ReadyCard: View {
             }
             startKeycapLoop()
         }
+        .onDisappear {
+            keycapLoopTask?.cancel()
+            keycapLoopTask = nil
+            keycapPressed = false
+        }
     }
 
     private func startKeycapLoop() {
-        Task {
+        keycapLoopTask?.cancel()
+        keycapLoopTask = Task {
             try? await Task.sleep(for: .seconds(1.5))
 
             while !Task.isCancelled {
@@ -728,23 +742,4 @@ private struct OnboardingButtonPressStyle: ButtonStyle {
 
 private enum SlideDirection {
     case forward, backward
-}
-
-private struct CardTransitionModifier: ViewModifier {
-    let isActive: Bool
-    let direction: SlideDirection
-
-    func body(content: Content) -> some View {
-        content
-            .offset(x: isActive ? 0 : (direction == .forward ? 80 : -80))
-            .opacity(isActive ? 1 : 0)
-            .animation(OnboardingTheme.slideSpring, value: isActive)
-            .allowsHitTesting(isActive)
-    }
-}
-
-private extension View {
-    func cardTransition(isActive: Bool, direction: SlideDirection) -> some View {
-        modifier(CardTransitionModifier(isActive: isActive, direction: direction))
-    }
 }
