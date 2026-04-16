@@ -91,6 +91,19 @@ struct TranscriptEntry: Identifiable, Codable, Hashable {
     let modelName: String
 }
 
+struct PendingTranscriptDeletion: Equatable {
+    let token = UUID()
+    let entries: [TranscriptEntry]
+
+    var count: Int {
+        entries.count
+    }
+
+    var title: String {
+        count == 1 ? "Transcript deleted" : "\(count) transcripts deleted"
+    }
+}
+
 @MainActor
 @Observable
 final class AppController {
@@ -107,6 +120,7 @@ final class AppController {
     private var permissionMonitorTask: Task<Void, Never>?
     private var accessibilityNotificationObserver: NSObjectProtocol?
     private var menuFeedbackResetTask: Task<Void, Never>?
+    private var pendingDeleteResetTask: Task<Void, Never>?
     private var pendingInsertionTarget: InsertionTargetContext?
 
     var phase: RecordingPhase = .loadingModel {
@@ -315,6 +329,7 @@ final class AppController {
     var defaultInputDeviceID: AudioObjectID = kAudioObjectUnknown
     var inputPreference: AudioInputPreference = .systemDefault
     var menuFeedbackMessage: String?
+    var pendingTranscriptDeletion: PendingTranscriptDeletion?
 
     init() {
         configureRecorderCallbacks()
@@ -624,6 +639,30 @@ final class AppController {
     func deleteEntry(_ entry: TranscriptEntry) {
         history.removeAll { $0.id == entry.id }
         historyStore.save(history)
+
+        if let pendingTranscriptDeletion {
+            self.pendingTranscriptDeletion = PendingTranscriptDeletion(
+                entries: pendingTranscriptDeletion.entries + [entry]
+            )
+        } else {
+            pendingTranscriptDeletion = PendingTranscriptDeletion(entries: [entry])
+        }
+
+        schedulePendingDeletionDismissal()
+    }
+
+    func undoPendingDeletion() {
+        guard let pendingTranscriptDeletion else {
+            return
+        }
+
+        pendingDeleteResetTask?.cancel()
+        pendingDeleteResetTask = nil
+        self.pendingTranscriptDeletion = nil
+
+        history.append(contentsOf: pendingTranscriptDeletion.entries)
+        history.sort { $0.createdAt > $1.createdAt }
+        historyStore.save(history)
     }
 
     func copy(_ entry: TranscriptEntry) {
@@ -695,6 +734,19 @@ final class AppController {
                 self?.syncPermissionState()
                 try? await Task.sleep(for: .milliseconds(1500))
             }
+        }
+    }
+
+    private func schedulePendingDeletionDismissal() {
+        pendingDeleteResetTask?.cancel()
+        pendingDeleteResetTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(for: .seconds(4.25))
+            guard !Task.isCancelled else {
+                return
+            }
+
+            self?.pendingTranscriptDeletion = nil
+            self?.pendingDeleteResetTask = nil
         }
     }
 

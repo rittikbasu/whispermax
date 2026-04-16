@@ -360,8 +360,21 @@ private struct HistorySection: View {
                                 .stroke(Theme.historyBoxBorder, lineWidth: 1)
                         )
                 )
+                .overlay(alignment: .bottomTrailing) {
+                    if let pendingTranscriptDeletion = controller.pendingTranscriptDeletion {
+                        DeleteUndoToast(
+                            token: pendingTranscriptDeletion.token,
+                            title: pendingTranscriptDeletion.title,
+                            undoAction: controller.undoPendingDeletion
+                        )
+                        .padding(.trailing, 18)
+                        .padding(.bottom, 18)
+                        .transition(.move(edge: .bottom).combined(with: .opacity))
+                    }
+                }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .animation(.easeOut(duration: 0.18), value: controller.pendingTranscriptDeletion)
     }
 }
 
@@ -406,7 +419,7 @@ private struct VirtualizedHistoryList: View {
         .onAppear {
             resetViewport()
         }
-        .onChange(of: entries.count) { _ in
+        .onChange(of: entries.count) {
             syncViewportToEntryCount()
         }
     }
@@ -559,7 +572,6 @@ private struct HistoryRow: View {
     let entry: TranscriptEntry
 
     @State private var showCopied = false
-    @State private var confirmingDelete = false
 
     var body: some View {
         HStack(alignment: .bottom, spacing: 18) {
@@ -594,9 +606,8 @@ private struct HistoryRow: View {
 
             HistoryRowActions(
                 showCopied: showCopied,
-                confirmingDelete: confirmingDelete,
                 copyAction: copyEntry,
-                deleteAction: handleDelete
+                deleteAction: { controller.deleteEntry(entry) }
             )
             .padding(.bottom, 2)
         }
@@ -641,18 +652,6 @@ private struct HistoryRow: View {
         }
     }
 
-    private func handleDelete() {
-        if confirmingDelete {
-            controller.deleteEntry(entry)
-        } else {
-            confirmingDelete = true
-
-            Task {
-                try? await Task.sleep(for: .milliseconds(1800))
-                confirmingDelete = false
-            }
-        }
-    }
 }
 
 private struct HistoryRowMetadata: View {
@@ -689,7 +688,6 @@ private struct MetadataDot: View {
 
 private struct HistoryRowActions: View {
     let showCopied: Bool
-    let confirmingDelete: Bool
     let copyAction: () -> Void
     let deleteAction: () -> Void
 
@@ -707,11 +705,11 @@ private struct HistoryRowActions: View {
             HistoryActionButton(
                 normalSymbol: "trash",
                 activeSymbol: "trash.fill",
-                isActive: confirmingDelete,
+                isActive: false,
                 activeTint: Color(red: 0.93, green: 0.38, blue: 0.34),
                 action: deleteAction
             )
-            .help(confirmingDelete ? "Tap again to confirm" : "Delete transcription")
+            .help("Delete transcription")
         }
         .frame(width: 54, alignment: .trailing)
     }
@@ -741,6 +739,90 @@ private struct HistoryActionButton: View {
             .animation(.easeOut(duration: 0.14), value: isActive)
         }
         .buttonStyle(.plain)
+    }
+}
+
+private struct DeleteUndoToast: View {
+    let token: UUID
+    let title: String
+    let undoAction: () -> Void
+
+    @State private var progress: CGFloat = 1
+
+    private let progressAnimationDuration: Double = 4.0
+
+    var body: some View {
+        HStack(spacing: 10) {
+            Text(title)
+                .font(.system(size: 12, weight: .medium))
+                .foregroundStyle(.white.opacity(0.82))
+
+            Rectangle()
+                .fill(Color.white.opacity(0.08))
+                .frame(width: 1, height: 12)
+
+            Button(action: undoAction) {
+                Text("Undo")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(Color(red: 0.63, green: 0.76, blue: 0.98))
+            }
+            .buttonStyle(.plain)
+        }
+        .padding(.horizontal, 14)
+        .frame(height: 34)
+        .fixedSize(horizontal: true, vertical: false)
+        .background(
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .fill(
+                    LinearGradient(
+                        colors: [
+                            Color(red: 0.082, green: 0.085, blue: 0.098).opacity(0.98),
+                            Color(red: 0.060, green: 0.063, blue: 0.075).opacity(0.98),
+                        ],
+                        startPoint: .top,
+                        endPoint: .bottom
+                    )
+                )
+                .overlay(
+                    RoundedRectangle(cornerRadius: 14, style: .continuous)
+                        .stroke(Color.white.opacity(0.08), lineWidth: 1)
+                )
+        )
+        .overlay {
+            GeometryReader { proxy in
+                RoundedRectangle(cornerRadius: 14, style: .continuous)
+                    .fill(
+                        LinearGradient(
+                            colors: [
+                                Color(red: 0.33, green: 0.41, blue: 0.56).opacity(0.17),
+                                Color.white.opacity(0.075),
+                                Color.white.opacity(0.03),
+                                .clear,
+                            ],
+                            startPoint: .leading,
+                            endPoint: .trailing
+                        )
+                    )
+                    .frame(width: proxy.size.width * max(progress, 0))
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
+                    .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+                    .allowsHitTesting(false)
+            }
+        }
+        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .shadow(color: Color.black.opacity(0.16), radius: 12, y: 8)
+        .onAppear {
+            progress = 1
+            withAnimation(.linear(duration: progressAnimationDuration)) {
+                progress = 0
+            }
+        }
+        .onChange(of: token) {
+            progress = 1
+            withAnimation(.linear(duration: progressAnimationDuration)) {
+                progress = 0
+            }
+        }
     }
 }
 
