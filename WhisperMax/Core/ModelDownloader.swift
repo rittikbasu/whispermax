@@ -29,13 +29,20 @@ final class ModelDownloader: NSObject {
         downloadTask?.resume()
     }
 
-    // Call on app termination — saves resume data so the next launch picks up mid-download
+    // Call on app termination — blocks until resume data is written so next launch can pick up mid-download
     func pause() {
-        downloadTask?.cancel(byProducingResumeData: { resumeData in
-            guard let resumeData else { return }
-            try? resumeData.write(to: ModelLocator.downloadResumeDataURL)
-        })
+        guard let task = downloadTask else { return }
         downloadTask = nil
+
+        let semaphore = DispatchSemaphore(value: 0)
+        task.cancel(byProducingResumeData: { resumeData in
+            if let resumeData {
+                try? resumeData.write(to: ModelLocator.downloadResumeDataURL)
+            }
+            semaphore.signal()
+        })
+        // Wait up to 2 seconds for the resume data to be written before the process exits
+        _ = semaphore.wait(timeout: .now() + 2)
     }
 
     func cancel() {
