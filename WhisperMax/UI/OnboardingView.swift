@@ -57,10 +57,6 @@ private struct StyledAppName: View {
 
 private final class OnboardingWindowDelegate: NSObject, NSWindowDelegate {
     func windowShouldZoom(_ window: NSWindow, toFrame newFrame: NSRect) -> Bool { false }
-    func window(_ window: NSWindow, willUseFullScreenPresentationOptions proposedOptions: NSApplication.PresentationOptions) -> NSApplication.PresentationOptions { [] }
-    func windowWillEnterFullScreen(_ notification: Notification) {
-        (notification.object as? NSWindow)?.toggleFullScreen(nil)
-    }
 }
 
 private struct OnboardingWindowResizer: NSViewRepresentable {
