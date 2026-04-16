@@ -1,4 +1,5 @@
 import AppKit
+import CoreAudio
 import Foundation
 import Observation
 
@@ -35,12 +36,17 @@ struct TranscriptEntry: Identifiable, Codable, Hashable {
 @Observable
 final class AppController {
     private let historyStore = HistoryStore()
+    private let inputDeviceService = AudioInputDeviceService()
+    private let inputPreferenceStore = AudioInputPreferenceStore()
     private let permissionsManager = PermissionsManager()
     private let insertionService = TextInsertionService()
     private let recorder = AudioRecorderService()
 
     private var whisperEngine: WhisperEngine?
+    private var preRecordingSystemDefaultInputDeviceID: AudioObjectID?
+    private var recordingPinnedDeviceID: AudioObjectID?
     private var permissionRefreshTask: Task<Void, Never>?
+    private var menuFeedbackResetTask: Task<Void, Never>?
     private var hasPromptedAccessibilityThisLaunch = false
     private var pendingInsertionTarget: InsertionTargetContext?
 
@@ -58,6 +64,7 @@ final class AppController {
     var lastTranscript: String = ""
     var searchText: String = ""
     var history: [TranscriptEntry] = []
+    var inputDevices: [AudioInputDevice] = []
     var statusText: String = "Loading local model..."
     var modelDisplayName: String = "Whisper Large V3 Turbo"
     var modelPath: String = ""
@@ -65,9 +72,13 @@ final class AppController {
     var hotkeyInstructionText: String = "Option + Space"
     var accessibilityGranted = false
     var microphoneGranted = false
+    var defaultInputDeviceID: AudioObjectID = kAudioObjectUnknown
+    var inputPreference: AudioInputPreference = .systemDefault
+    var menuFeedbackMessage: String?
 
     init() {
         configureRecorderCallbacks()
+        configureInputDeviceObservation()
     }
 
     var filteredHistory: [TranscriptEntry] {
@@ -91,6 +102,83 @@ final class AppController {
 
     var needsSetup: Bool {
         !microphoneGranted || !accessibilityGranted
+    }
+
+    var defaultInputDeviceName: String {
+        inputDevices.first(where: { $0.audioObjectID == defaultInputDeviceID })?.name ?? "No Input Device"
+    }
+
+    var canCopyLastTranscript: Bool {
+        transcriptToCopy != nil
+    }
+
+    var prefersSystemDefaultInput: Bool {
+        if case .systemDefault = inputPreference {
+            return true
+        }
+        return false
+    }
+
+    var preferredPinnedInput: PinnedAudioInputPreference? {
+        if case .pinned(let pinnedPreference) = inputPreference {
+            return pinnedPreference
+        }
+        return nil
+    }
+
+    var unavailablePinnedInput: PinnedAudioInputPreference? {
+        guard let preferredPinnedInput else {
+            return nil
+        }
+
+        let isAvailable = inputDevices.contains { $0.audioObjectID == preferredPinnedInput.resolvedAudioObjectID }
+        return isAvailable ? nil : preferredPinnedInput
+    }
+
+    var activeInputDisplayName: String {
+        defaultInputDeviceName
+    }
+
+    var preferredInputDisplayName: String {
+        switch inputPreference {
+        case .systemDefault:
+            return "System Default"
+        case .pinned(let pinnedPreference):
+            return "Pinned — \(pinnedPreference.name)"
+        }
+    }
+
+    var inputMenuLabel: String {
+        switch inputPreference {
+        case .systemDefault:
+            return "System Default"
+        case .pinned(let pinnedPreference):
+            return unavailablePinnedInput == nil
+                ? pinnedPreference.name
+                : "\(pinnedPreference.name) Unavailable"
+        }
+    }
+
+    var menuPrimaryActionTitle: String {
+        switch phase {
+        case .loadingModel:
+            return "Loading Model…"
+        case .ready, .inserted, .error:
+            return "Start Recording"
+        case .recording:
+            return "Stop Recording"
+        case .transcribing:
+            return "Transcribing…"
+        }
+    }
+
+    var isMenuPrimaryActionEnabled: Bool {
+        switch phase {
+        case .loadingModel, .transcribing:
+            return false
+        default:
+            return true
+        }
     }
 
     private var readySubtitle: String {
@@ -136,7 +224,9 @@ final class AppController {
             return
         }
 
+        inputPreference = inputPreferenceStore.load()
         history = historyStore.load().sorted { $0.createdAt > $1.createdAt }
+        refreshInputDevices()
         refreshPermissions()
         statusText = idleStatusText
 
@@ -168,6 +258,47 @@ final class AppController {
         hasPromptedAccessibilityThisLaunch = true
         permissionsManager.promptForAccessibility()
         refreshPermissions()
+    }
+
+    func refreshInputDevices() {
+        do {
+            let snapshot = try inputDeviceService.snapshot()
+            inputDevices = snapshot.devices
+            defaultInputDeviceID = snapshot.defaultDeviceID
+        } catch {
+            inputDevices = []
+            defaultInputDeviceID = kAudioObjectUnknown
+        }
+    }
+
+    func useSystemDefaultInput() {
+        guard !prefersSystemDefaultInput else {
+            return
+        }
+
+        inputPreference = .systemDefault
+        inputPreferenceStore.save(inputPreference)
+        setMenuFeedback("Using System Default")
+    }
+
+    func pinInputDevice(_ device: AudioInputDevice) {
+        let pinnedPreference = PinnedAudioInputPreference(audioObjectID: device.audioObjectID, name: device.name)
+
+        guard inputPreference != .pinned(pinnedPreference) else {
+            return
+        }
+
+        inputPreference = .pinned(pinnedPreference)
+        inputPreferenceStore.save(inputPreference)
+        setMenuFeedback("Pinned \(device.name)")
+    }
+
+    func isPreferredInput(_ device: AudioInputDevice) -> Bool {
+        guard let preferredPinnedInput else {
+            return false
+        }
+
+        return device.audioObjectID == preferredPinnedInput.resolvedAudioObjectID
     }
 
     func openAccessibilitySettings() {
@@ -205,6 +336,7 @@ final class AppController {
             }
 
             do {
+                prepareInputDeviceForRecording()
                 recordingDuration = 0
                 lastTranscript = ""
                 pendingInsertionTarget = insertionService.captureTargetContext()
@@ -238,6 +370,7 @@ final class AppController {
         }
 
         recorder.cancel()
+        restoreSystemInputAfterRecordingIfNeeded()
         pendingInsertionTarget = nil
         recordingDuration = 0
         resetWaveform(active: false)
@@ -258,6 +391,16 @@ final class AppController {
     func copy(_ entry: TranscriptEntry) {
         NSPasteboard.general.clearContents()
         NSPasteboard.general.setString(entry.text, forType: .string)
+    }
+
+    func copyLastTranscript() {
+        guard let transcriptToCopy else {
+            return
+        }
+
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(transcriptToCopy, forType: .string)
+        setMenuFeedback("Copied last transcript")
     }
 
     func reinsert(_ entry: TranscriptEntry) {
@@ -283,6 +426,80 @@ final class AppController {
 
         recorder.onError = { [weak self] message in
             self?.setError(message)
+        }
+    }
+
+    private func configureInputDeviceObservation() {
+        inputDeviceService.startObserving { [weak self] in
+            Task { @MainActor [weak self] in
+                self?.refreshInputDevices()
+            }
+        }
+    }
+
+    private func prepareInputDeviceForRecording() {
+        refreshInputDevices()
+        preRecordingSystemDefaultInputDeviceID = nil
+        recordingPinnedDeviceID = nil
+
+        guard let preferredPinnedInput else {
+            return
+        }
+
+        let pinnedDeviceID = preferredPinnedInput.resolvedAudioObjectID
+        guard inputDevices.contains(where: { $0.audioObjectID == pinnedDeviceID }) else {
+            setMenuFeedback("\(preferredPinnedInput.name) unavailable. Using System Default")
+            return
+        }
+
+        recordingPinnedDeviceID = pinnedDeviceID
+
+        guard defaultInputDeviceID != pinnedDeviceID else {
+            return
+        }
+
+        let originalDefaultInputDeviceID = defaultInputDeviceID
+
+        do {
+            try inputDeviceService.setDefaultInputDevice(pinnedDeviceID)
+            preRecordingSystemDefaultInputDeviceID = originalDefaultInputDeviceID
+            refreshInputDevices()
+        } catch {
+            recordingPinnedDeviceID = nil
+            setMenuFeedback("Couldn’t switch to \(preferredPinnedInput.name). Using System Default")
+        }
+    }
+
+    private func restoreSystemInputAfterRecordingIfNeeded() {
+        guard let preRecordingSystemDefaultInputDeviceID else {
+            recordingPinnedDeviceID = nil
+            return
+        }
+
+        defer {
+            self.preRecordingSystemDefaultInputDeviceID = nil
+            self.recordingPinnedDeviceID = nil
+        }
+
+        refreshInputDevices()
+
+        guard let recordingPinnedDeviceID else {
+            return
+        }
+
+        guard defaultInputDeviceID == recordingPinnedDeviceID else {
+            return
+        }
+
+        guard inputDevices.contains(where: { $0.audioObjectID == preRecordingSystemDefaultInputDeviceID }) else {
+            return
+        }
+
+        do {
+            try inputDeviceService.setDefaultInputDevice(preRecordingSystemDefaultInputDeviceID)
+            refreshInputDevices()
+        } catch {
+            // If restoration fails, preserve recording behavior rather than surfacing a blocking error.
         }
     }
 
@@ -324,6 +541,7 @@ final class AppController {
     private func transcribeAndInsert(from url: URL) async {
         defer {
             try? FileManager.default.removeItem(at: url)
+            restoreSystemInputAfterRecordingIfNeeded()
             pendingInsertionTarget = nil
         }
 
@@ -438,5 +656,32 @@ final class AppController {
                 return
             }
         }
+    }
+
+    private func setMenuFeedback(_ message: String) {
+        menuFeedbackResetTask?.cancel()
+        menuFeedbackMessage = message
+        NSHapticFeedbackManager.defaultPerformer.perform(.alignment, performanceTime: .default)
+
+        menuFeedbackResetTask = Task { [weak self] in
+            try? await Task.sleep(for: .seconds(2.2))
+            guard !Task.isCancelled else {
+                return
+            }
+
+            await MainActor.run {
+                guard let self else { return }
+                self.menuFeedbackMessage = nil
+            }
+        }
+    }
+
+    private var transcriptToCopy: String? {
+        let trimmedLastTranscript = lastTranscript.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !trimmedLastTranscript.isEmpty {
+            return trimmedLastTranscript
+        }
+
+        return history.first?.text
     }
 }

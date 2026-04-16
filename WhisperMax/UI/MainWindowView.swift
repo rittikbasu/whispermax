@@ -753,6 +753,8 @@ private struct SettingsSection: View {
                 SettingRow(label: "Hotkey", value: controller.hotkeyDisplay)
                 SettingRow(label: "Model", value: controller.modelDisplayName)
                 SettingRow(label: "Model Path", value: controller.modelPath)
+                SettingRow(label: "Input Preference", value: controller.preferredInputDisplayName)
+                SettingRow(label: "Active Input", value: controller.activeInputDisplayName)
                 SettingRow(label: "Accessibility", value: controller.accessibilityGranted ? "Granted" : "Not Granted")
                 SettingRow(label: "Microphone", value: controller.microphoneGranted ? "Granted" : "Not Granted")
 

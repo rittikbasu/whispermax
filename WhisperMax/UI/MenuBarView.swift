@@ -6,40 +6,77 @@ struct MenuBarView: View {
     @Environment(\.openWindow) private var openWindow
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            VStack(alignment: .leading, spacing: 4) {
-                Text("whispermax")
-                    .font(.system(size: 14, weight: .semibold))
-                Text(controller.statusText)
-                    .font(.system(size: 11, weight: .medium))
-                    .foregroundStyle(.secondary)
+        Group {
+            Button(controller.menuPrimaryActionTitle) {
+                Task {
+                    await controller.toggleRecording()
+                }
+            }
+            .disabled(!controller.isMenuPrimaryActionEnabled)
+
+            Button("Copy Last Transcript") {
+                controller.copyLastTranscript()
+            }
+            .disabled(!controller.canCopyLastTranscript)
+
+            if let menuFeedbackMessage = controller.menuFeedbackMessage {
+                Divider()
+
+                Text(menuFeedbackMessage)
             }
 
             Divider()
 
-            Button("Open App") {
-                controller.sidebarSelection = .home
-                openWindow(id: "main")
-                NSApp.activate(ignoringOtherApps: true)
-            }
-
-            Button("Open History") {
+            Button("History") {
                 controller.sidebarSelection = .history
-                openWindow(id: "main")
-                NSApp.activate(ignoringOtherApps: true)
+                openMainWindow()
             }
 
-            Divider()
+            Button("Settings") {
+                controller.sidebarSelection = .settings
+                openMainWindow()
+            }
 
-            Label("Hotkey: \(controller.hotkeyDisplay)", systemImage: "keyboard")
-                .font(.system(size: 11, weight: .medium))
-                .foregroundStyle(.secondary)
+            Menu {
+                if controller.inputDevices.isEmpty {
+                    Text("No input devices available")
+                } else {
+                    Button {
+                        controller.useSystemDefaultInput()
+                    } label: {
+                        if controller.prefersSystemDefaultInput {
+                            Label(systemDefaultMenuItemTitle, systemImage: "checkmark")
+                        } else {
+                            Text(systemDefaultMenuItemTitle)
+                        }
+                    }
 
-            Label("Model: \(controller.modelDisplayName)", systemImage: "cpu")
-                .font(.system(size: 11, weight: .medium))
-                .foregroundStyle(.secondary)
+                    if let unavailablePinnedInput = controller.unavailablePinnedInput {
+                        Divider()
+                        Text("\(unavailablePinnedInput.name) unavailable")
+                    }
+
+                    Divider()
+
+                    ForEach(controller.inputDevices) { device in
+                        Button {
+                            controller.pinInputDevice(device)
+                        } label: {
+                            if controller.isPreferredInput(device) {
+                                Label(device.name, systemImage: "checkmark")
+                            } else {
+                                Text(device.name)
+                            }
+                        }
+                    }
+                }
+            } label: {
+                Text(controller.inputMenuLabel)
+            }
 
             if !controller.accessibilityGranted {
+                Divider()
+
                 Button("Prompt Accessibility Access") {
                     controller.promptForAccessibility()
                 }
@@ -51,7 +88,19 @@ struct MenuBarView: View {
                 NSApp.terminate(nil)
             }
         }
-        .padding(12)
-        .frame(width: 260)
+        .onAppear {
+            controller.refreshInputDevices()
+        }
+    }
+
+    private var systemDefaultMenuItemTitle: String {
+        controller.defaultInputDeviceName == "No Input Device"
+            ? "System Default"
+            : "System Default (\(controller.defaultInputDeviceName))"
+    }
+
+    private func openMainWindow() {
+        openWindow(id: "main")
+        NSApp.activate(ignoringOtherApps: true)
     }
 }
