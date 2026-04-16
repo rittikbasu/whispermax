@@ -119,6 +119,10 @@ final class AppController {
         startModelSetup()
     }
 
+    func pauseModelDownload() {
+        modelDownloader?.pause()
+    }
+
     func advanceOnboarding() {
         guard let nextIndex = OnboardingStep(rawValue: onboardingStep.rawValue + 1) else {
             completeOnboarding()

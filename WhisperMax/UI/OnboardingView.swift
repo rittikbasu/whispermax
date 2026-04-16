@@ -83,6 +83,7 @@ private struct OnboardingWindowResizer: NSViewRepresentable {
             window.collectionBehavior.insert(.fullScreenNone)
             if let zoomButton = window.standardWindowButton(.zoomButton) {
                 zoomButton.isEnabled = false
+                zoomButton.alphaValue = 0.5
             }
         }
         return view

@@ -18,13 +18,30 @@ final class ModelDownloader: NSObject {
         config.timeoutIntervalForRequest = 60
 
         session = URLSession(configuration: config, delegate: self, delegateQueue: nil)
-        downloadTask = session?.downloadTask(with: Self.remoteURL)
+
+        // Resume from where we left off if interrupted previously
+        if let resumeData = try? Data(contentsOf: ModelLocator.downloadResumeDataURL) {
+            downloadTask = session?.downloadTask(withResumeData: resumeData)
+        } else {
+            downloadTask = session?.downloadTask(with: Self.remoteURL)
+        }
+
         downloadTask?.resume()
+    }
+
+    // Call on app termination — saves resume data so the next launch picks up mid-download
+    func pause() {
+        downloadTask?.cancel(byProducingResumeData: { resumeData in
+            guard let resumeData else { return }
+            try? resumeData.write(to: ModelLocator.downloadResumeDataURL)
+        })
+        downloadTask = nil
     }
 
     func cancel() {
         downloadTask?.cancel()
         downloadTask = nil
+        try? FileManager.default.removeItem(at: ModelLocator.downloadResumeDataURL)
     }
 }
 
@@ -56,6 +73,8 @@ extension ModelDownloader: URLSessionDownloadDelegate {
                 try FileManager.default.removeItem(at: dest)
             }
             try FileManager.default.moveItem(at: location, to: dest)
+            // Clean up resume data — download is complete
+            try? FileManager.default.removeItem(at: ModelLocator.downloadResumeDataURL)
             DispatchQueue.main.async { self.onComplete?() }
         } catch {
             DispatchQueue.main.async {
@@ -70,9 +89,15 @@ extension ModelDownloader: URLSessionDownloadDelegate {
         didCompleteWithError error: Error?
     ) {
         guard let error else { return }
-        // Ignore cancellation
         let nsError = error as NSError
+        // Cancellation is intentional — don't report as error
         guard nsError.code != NSURLErrorCancelled else { return }
+
+        // If the session has resume data (e.g. network drop), save it for next launch
+        if let resumeData = nsError.userInfo[NSURLSessionDownloadTaskResumeData] as? Data {
+            try? resumeData.write(to: ModelLocator.downloadResumeDataURL)
+        }
+
         DispatchQueue.main.async {
             self.onError?(error.localizedDescription)
         }
