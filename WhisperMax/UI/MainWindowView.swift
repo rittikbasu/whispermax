@@ -35,6 +35,21 @@ struct MainWindowView: View {
 
     var body: some View {
         ZStack {
+            if controller.hasCompletedOnboarding {
+                mainAppShell
+                    .frame(minWidth: 1040, minHeight: 760)
+                    .background(OnboardingWindowRestorer())
+            } else {
+                OnboardingView()
+                    .transition(.opacity)
+            }
+        }
+        .animation(.easeInOut(duration: 0.4), value: controller.hasCompletedOnboarding)
+        .background(WindowChromeConfigurator())
+    }
+
+    private var mainAppShell: some View {
+        ZStack {
             Theme.shell.ignoresSafeArea()
 
             HStack(spacing: 0) {
@@ -58,7 +73,6 @@ struct MainWindowView: View {
             .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
             .ignoresSafeArea()
         }
-        .background(WindowChromeConfigurator())
     }
 }
 

@@ -23,6 +23,12 @@ enum RecordingPhase: Equatable {
     case error(String)
 }
 
+enum OnboardingStep: Int, CaseIterable {
+    case download
+    case permissions
+    case ready
+}
+
 enum SidebarSelection: String, CaseIterable {
     case home
     case history
@@ -44,7 +50,7 @@ final class AppController {
     private let historyStore = HistoryStore()
     private let inputDeviceService = AudioInputDeviceService()
     private let inputPreferenceStore = AudioInputPreferenceStore()
-    private let permissionsManager = PermissionsManager()
+    let permissionsManager = PermissionsManager()
     private let insertionService = TextInsertionService()
     private let recorder = AudioRecorderService()
 
@@ -63,6 +69,75 @@ final class AppController {
     }
 
     var phaseDidChange: ((RecordingPhase) -> Void)?
+    var onOnboardingComplete: (() -> Void)?
+
+    // MARK: - Onboarding
+
+    var hasCompletedOnboarding: Bool = false
+    var onboardingStep: OnboardingStep = .download
+    var downloadProgress: Double = 0
+    var isDownloading: Bool = false
+
+    private var downloadSimulationTask: Task<Void, Never>?
+
+    var isDownloadComplete: Bool { downloadProgress >= 1.0 }
+
+    func startSimulatedDownload() {
+        guard !isDownloading, !isDownloadComplete else { return }
+        isDownloading = true
+        downloadProgress = 0
+
+        downloadSimulationTask = Task { [weak self] in
+            let totalSteps = 60
+            for step in 1...totalSteps {
+                guard !Task.isCancelled else { return }
+                try? await Task.sleep(for: .milliseconds(50))
+
+                await MainActor.run {
+                    guard let self else { return }
+                    let base = Double(step) / Double(totalSteps)
+                    let wobble = Double.random(in: -0.008...0.008)
+                    self.downloadProgress = min(base + wobble, 1.0)
+                }
+            }
+
+            await MainActor.run {
+                guard let self else { return }
+                self.downloadProgress = 1.0
+                self.isDownloading = false
+            }
+        }
+    }
+
+    func advanceOnboarding() {
+        guard let nextIndex = OnboardingStep(rawValue: onboardingStep.rawValue + 1) else {
+            completeOnboarding()
+            return
+        }
+        onboardingStep = nextIndex
+    }
+
+    func completeOnboarding() {
+        hasCompletedOnboarding = true
+        FileManager.default.createFile(
+            atPath: ModelLocator.onboardingCompleteFileURL.path,
+            contents: nil
+        )
+
+        onOnboardingComplete?()
+
+        Task {
+            await preloadModel()
+        }
+    }
+
+    func loadOnboardingState() {
+        hasCompletedOnboarding = FileManager.default.fileExists(
+            atPath: ModelLocator.onboardingCompleteFileURL.path
+        )
+    }
+
+    // MARK: - Main State
 
     var sidebarSelection: SidebarSelection = .home
     var waveformLevels: [CGFloat] = Array(
@@ -233,11 +308,14 @@ final class AppController {
             return
         }
 
+        loadOnboardingState()
         inputPreference = inputPreferenceStore.load()
         history = historyStore.load().sorted { $0.createdAt > $1.createdAt }
         refreshInputDevices()
         refreshPermissions()
         statusText = idleStatusText
+
+        guard hasCompletedOnboarding else { return }
 
         Task {
             await requestInitialPermissionsIfNeeded()

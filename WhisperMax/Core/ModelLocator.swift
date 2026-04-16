@@ -8,6 +8,7 @@ enum ModelLocator {
 
     static let historyFileURL = appSupportDirectory.appendingPathComponent("history.json")
     static let audioInputPreferenceFileURL = appSupportDirectory.appendingPathComponent("audio-input-preference.json")
+    static let onboardingCompleteFileURL = appSupportDirectory.appendingPathComponent("onboarding-complete")
     static let modelsDirectory = appSupportDirectory.appendingPathComponent("Models", isDirectory: true)
     static let temporaryRecordingsDirectory = appSupportDirectory.appendingPathComponent("Recordings", isDirectory: true)
     static let appLocalModelURL = modelsDirectory.appendingPathComponent("ggml-large-v3-turbo.bin")

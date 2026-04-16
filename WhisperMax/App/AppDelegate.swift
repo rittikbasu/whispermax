@@ -12,7 +12,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         recorderPanelController = RecorderPanelController(controller: controller)
         hotkeyMonitor = GlobalHotkeyMonitor(controller: controller)
-        hotkeyMonitor?.start()
 
         controller.phaseDidChange = { [weak self] phase in
             Task { @MainActor [weak self] in
@@ -20,7 +19,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
         }
 
+        controller.onOnboardingComplete = { [weak self] in
+            self?.hotkeyMonitor?.start()
+        }
+
         controller.launch()
+
+        if controller.hasCompletedOnboarding {
+            hotkeyMonitor?.start()
+        }
     }
 
     func applicationDidBecomeActive(_ notification: Notification) {

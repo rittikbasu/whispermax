@@ -7,7 +7,6 @@ struct WhisperMaxApp: App {
     var body: some Scene {
         Window("whispermax", id: "main") {
             MainWindowView()
-                .frame(minWidth: 1040, minHeight: 760)
                 .environment(appDelegate.controller)
                 .preferredColorScheme(.dark)
         }
