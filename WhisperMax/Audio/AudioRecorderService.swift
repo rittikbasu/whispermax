@@ -1,8 +1,7 @@
 import AVFoundation
 import Foundation
 
-@MainActor
-final class AudioRecorderService: NSObject {
+final class AudioRecorderService {
     enum RecorderError: LocalizedError {
         case couldNotStartRecording
 
@@ -14,113 +13,261 @@ final class AudioRecorderService: NSObject {
         }
     }
 
-    private var recorder: AVAudioRecorder?
-    private var meterTimer: Timer?
-    private var shouldDiscardCurrentRecording = false
+    private let stateLock = NSLock()
 
-    var onMeter: ((Float, TimeInterval) -> Void)?
-    var onFinish: ((URL) -> Void)?
-    var onError: ((String) -> Void)?
+    private var engine: AVAudioEngine?
+    private var recordingFile: AVAudioFile?
+    private var recordingURL: URL?
+    private var shouldDiscardCurrentRecording = false
+    private var isRecording = false
+    private var recordedDuration: TimeInterval = 0
+    private var lastMeterEmissionTime: TimeInterval = 0
+    private var ambientFloorDB: Float = -52
+    private var displayedLevel: Float = 0
+    private var recentRMSDB: [Float] = []
+
+    var onMeter: (@MainActor @Sendable (Float, TimeInterval) -> Void)?
+    var onFinish: (@MainActor @Sendable (URL) -> Void)?
+    var onError: (@MainActor @Sendable (String) -> Void)?
 
     func start() throws {
         try ModelLocator.prepareDirectories()
 
         let url = ModelLocator.temporaryRecordingsDirectory
             .appendingPathComponent(UUID().uuidString)
-            .appendingPathExtension("wav")
+            .appendingPathExtension("caf")
 
-        let settings: [String: Any] = [
-            AVFormatIDKey: Int(kAudioFormatLinearPCM),
-            AVSampleRateKey: 16_000.0,
-            AVNumberOfChannelsKey: 1,
-            AVLinearPCMBitDepthKey: 16,
-            AVLinearPCMIsBigEndianKey: false,
-            AVLinearPCMIsFloatKey: false,
-            AVEncoderAudioQualityKey: AVAudioQuality.high.rawValue,
-        ]
+        let engine = AVAudioEngine()
+        let inputNode = engine.inputNode
+        let hardwareFormat = inputNode.outputFormat(forBus: 0)
 
-        let recorder = try AVAudioRecorder(url: url, settings: settings)
-        recorder.delegate = self
-        recorder.isMeteringEnabled = true
-
-        shouldDiscardCurrentRecording = false
-
-        guard recorder.record() else {
+        guard
+            hardwareFormat.channelCount > 0,
+            let inputFormat = AVAudioFormat(
+                commonFormat: .pcmFormatFloat32,
+                sampleRate: hardwareFormat.sampleRate,
+                channels: hardwareFormat.channelCount,
+                interleaved: false
+            )
+        else {
             throw RecorderError.couldNotStartRecording
         }
 
-        self.recorder = recorder
-        startMetering()
+        let recordingFile = try AVAudioFile(
+            forWriting: url,
+            settings: inputFormat.settings,
+            commonFormat: inputFormat.commonFormat,
+            interleaved: inputFormat.isInterleaved
+        )
+
+        stateLock.lock()
+        shouldDiscardCurrentRecording = false
+        isRecording = true
+        recordedDuration = 0
+        lastMeterEmissionTime = 0
+        ambientFloorDB = -52
+        displayedLevel = 0
+        recentRMSDB.removeAll(keepingCapacity: true)
+        self.engine = engine
+        self.recordingFile = recordingFile
+        self.recordingURL = url
+        stateLock.unlock()
+
+        inputNode.removeTap(onBus: 0)
+        inputNode.installTap(
+            onBus: 0,
+            bufferSize: 1_024,
+            format: inputFormat
+        ) { [weak self] buffer, _ in
+            self?.handleInputBuffer(buffer)
+        }
+
+        do {
+            engine.prepare()
+            try engine.start()
+        } catch {
+            inputNode.removeTap(onBus: 0)
+            stateLock.lock()
+            self.engine = nil
+            self.recordingFile = nil
+            self.recordingURL = nil
+            self.isRecording = false
+            stateLock.unlock()
+            throw RecorderError.couldNotStartRecording
+        }
     }
 
     func stop() {
-        meterTimer?.invalidate()
-        meterTimer = nil
-        recorder?.stop()
+        finishRecording(discard: false)
     }
 
     func cancel() {
-        shouldDiscardCurrentRecording = true
-        stop()
+        finishRecording(discard: true)
     }
 
-    private func startMetering() {
-        meterTimer?.invalidate()
-        meterTimer = Timer.scheduledTimer(
-            timeInterval: 1.0 / 30.0,
-            target: self,
-            selector: #selector(handleMeterTimer),
-            userInfo: nil,
-            repeats: true
-        )
-    }
+    private func finishRecording(discard: Bool) {
+        let engine: AVAudioEngine?
 
-    @objc
-    private func handleMeterTimer() {
-        guard let recorder else { return }
+        stateLock.lock()
+        guard isRecording else {
+            stateLock.unlock()
+            return
+        }
 
-        recorder.updateMeters()
+        shouldDiscardCurrentRecording = discard
+        engine = self.engine
+        stateLock.unlock()
 
-        let averagePower = recorder.averagePower(forChannel: 0)
-        let peakPower = recorder.peakPower(forChannel: 0)
-        let averageAmplitude = pow(10, averagePower / 20)
-        let peakAmplitude = pow(10, peakPower / 20)
-        let blendedAmplitude = min((averageAmplitude * 0.74) + (peakAmplitude * 0.26), 1.0)
-        let gatedAmplitude = max(0, blendedAmplitude - 0.02) / 0.98
-        let normalizedPower = min(pow(gatedAmplitude, 0.82), 1.0)
-        onMeter?(Float(normalizedPower), recorder.currentTime)
-    }
-}
+        engine?.inputNode.removeTap(onBus: 0)
+        engine?.stop()
 
-extension AudioRecorderService: AVAudioRecorderDelegate {
-    nonisolated func audioRecorderEncodeErrorDidOccur(_ recorder: AVAudioRecorder, error: Error?) {
-        Task { @MainActor [weak self] in
-            self?.onError?(error?.localizedDescription ?? "Recording failed.")
+        let url: URL?
+        let shouldDiscard: Bool
+
+        stateLock.lock()
+        url = recordingURL
+        shouldDiscard = shouldDiscardCurrentRecording
+        self.engine = nil
+        self.recordingFile = nil
+        self.recordingURL = nil
+        self.shouldDiscardCurrentRecording = false
+        self.isRecording = false
+        self.recordedDuration = 0
+        self.lastMeterEmissionTime = 0
+        self.ambientFloorDB = -52
+        self.displayedLevel = 0
+        self.recentRMSDB.removeAll(keepingCapacity: true)
+        stateLock.unlock()
+
+        guard let url else {
+            return
+        }
+
+        if shouldDiscard {
+            try? FileManager.default.removeItem(at: url)
+            return
+        }
+
+        Task { @MainActor [onFinish] in
+            onFinish?(url)
         }
     }
 
-    nonisolated func audioRecorderDidFinishRecording(_ recorder: AVAudioRecorder, successfully flag: Bool) {
-        Task { @MainActor [weak self] in
-            guard let self else { return }
+    private func handleInputBuffer(_ buffer: AVAudioPCMBuffer) {
+        let metrics = Self.signalMetrics(from: buffer)
+        let duration: TimeInterval
+        let shouldEmitMeter: Bool
+        let emittedLevel: Float
 
-            defer {
-                self.meterTimer?.invalidate()
-                self.meterTimer = nil
-                self.recorder = nil
-            }
-
-            guard flag else {
-                self.onError?("Recording finished unsuccessfully.")
-                return
-            }
-
-            if self.shouldDiscardCurrentRecording {
-                try? FileManager.default.removeItem(at: recorder.url)
-                self.shouldDiscardCurrentRecording = false
-                return
-            }
-
-            self.onFinish?(recorder.url)
+        stateLock.lock()
+        guard let recordingFile else {
+            stateLock.unlock()
+            return
         }
+
+        do {
+            try recordingFile.write(from: buffer)
+        } catch {
+            let message = "Recording failed."
+            let onError = self.onError
+            stateLock.unlock()
+            Task { @MainActor in
+                onError?(message)
+            }
+            return
+        }
+
+        recordedDuration += Double(buffer.frameLength) / buffer.format.sampleRate
+        duration = recordedDuration
+        emittedLevel = updateDisplayLevel(with: metrics)
+
+        let now = ProcessInfo.processInfo.systemUptime
+        if now - lastMeterEmissionTime >= (1.0 / 36.0) {
+            lastMeterEmissionTime = now
+            shouldEmitMeter = true
+        } else {
+            shouldEmitMeter = false
+        }
+        stateLock.unlock()
+
+        guard shouldEmitMeter else {
+            return
+        }
+
+        let onMeter = self.onMeter
+        Task { @MainActor in
+            onMeter?(emittedLevel, duration)
+        }
+    }
+
+    private struct SignalMetrics {
+        let rmsDB: Float
+        let peakDB: Float
+    }
+
+    private func updateDisplayLevel(with metrics: SignalMetrics) -> Float {
+        recentRMSDB.append(metrics.rmsDB)
+        if recentRMSDB.count > 54 {
+            recentRMSDB.removeFirst(recentRMSDB.count - 54)
+        }
+
+        let sortedFloorSamples = recentRMSDB.sorted()
+        let percentileIndex = max(0, min(sortedFloorSamples.count - 1, Int(Double(sortedFloorSamples.count - 1) * 0.32)))
+        let floorCandidate = min(max(sortedFloorSamples[percentileIndex], -66), -24)
+        let floorResponsiveness: Float = floorCandidate > ambientFloorDB ? 0.30 : 0.10
+        ambientFloorDB += (floorCandidate - ambientFloorDB) * floorResponsiveness
+
+        let speechMargin: Float = 7.5
+        let rmsRange: Float = 17.0
+        let peakRange: Float = 22.0
+
+        let relativeRMS = max(0, metrics.rmsDB - (ambientFloorDB + speechMargin))
+        let relativePeak = max(0, metrics.peakDB - (ambientFloorDB + speechMargin + 1.5))
+
+        let rmsComponent = pow(min(relativeRMS / rmsRange, 1), 1.22)
+        let peakComponent = pow(min(relativePeak / peakRange, 1), 1.55) * 0.28
+        let targetLevel = max(rmsComponent, peakComponent)
+
+        let responsiveness: Float = targetLevel > displayedLevel ? 0.26 : 0.18
+        displayedLevel += (targetLevel - displayedLevel) * responsiveness
+
+        if displayedLevel < 0.012 {
+            displayedLevel = 0
+        }
+
+        return min(displayedLevel, 1)
+    }
+
+    private static func signalMetrics(from buffer: AVAudioPCMBuffer) -> SignalMetrics {
+        guard
+            let channelData = buffer.floatChannelData,
+            buffer.frameLength > 0
+        else {
+            return SignalMetrics(rmsDB: -80, peakDB: -80)
+        }
+
+        let frameCount = Int(buffer.frameLength)
+        let channelCount = Int(buffer.format.channelCount)
+        var sumSquares: Float = 0
+        var peak: Float = 0
+
+        for frame in 0..<frameCount {
+            var monoSample: Float = 0
+
+            for channel in 0..<channelCount {
+                monoSample += channelData[channel][frame]
+            }
+
+            monoSample /= Float(channelCount)
+
+            let magnitude = abs(monoSample)
+            sumSquares += monoSample * monoSample
+            peak = max(peak, magnitude)
+        }
+
+        let rms = sqrt(sumSquares / Float(frameCount))
+        let rmsDB = 20 * log10(max(rms, 0.000_000_1))
+        let peakDB = 20 * log10(max(peak, 0.000_000_1))
+        return SignalMetrics(rmsDB: rmsDB, peakDB: peakDB)
     }
 }

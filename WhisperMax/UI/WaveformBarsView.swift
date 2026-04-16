@@ -5,97 +5,67 @@ struct WaveformBarsView: View {
 
     var body: some View {
         GeometryReader { geometry in
-            let displayLevels = sampledLevels(forWidth: geometry.size.width)
-            let count = max(displayLevels.count, 1)
-            let spacing = CGFloat(0.9)
-            let totalSpacing = CGFloat(count - 1) * spacing
-            let rawBarWidth = (geometry.size.width - totalSpacing) / CGFloat(count)
-            let barWidth = min(max(rawBarWidth, 1.2), 2.2)
-            let minimumHeight = max(2, geometry.size.height * 0.015)
+            let count = max(levels.count, 1)
+            let activeWidth = activeWaveWidth(for: geometry.size.width)
+            let pitch = activeWidth / CGFloat(count)
+            let barWidth = min(max(pitch * 0.46, 1.9), 3.4)
+            let spacing = max(1.7, pitch - barWidth)
+            let renderedWidth = (CGFloat(count) * barWidth) + (CGFloat(max(0, count - 1)) * spacing)
+            let startX = (geometry.size.width - renderedWidth) * 0.5
+            let minHeight = max(1.4, geometry.size.height * 0.02)
+            let maxHeight = geometry.size.height * 0.68
 
-            HStack(alignment: .center, spacing: spacing) {
-                ForEach(displayLevels.indices, id: \.self) { index in
-                    let visualLevel = normalizedLevel(for: displayLevels[index])
+            Canvas(rendersAsynchronously: true) { context, size in
+                for index in levels.indices {
+                    let progress = CGFloat(index) / CGFloat(max(count - 1, 1))
+                    let opacity = edgeOpacity(for: progress)
+                    let visualLevel = visualLevel(for: levels[index])
+                    let barHeight = minHeight + ((maxHeight - minHeight) * visualLevel)
+                    let rect = CGRect(
+                        x: startX + (CGFloat(index) * (barWidth + spacing)),
+                        y: (size.height - barHeight) * 0.5,
+                        width: barWidth,
+                        height: barHeight
+                    )
+                    let path = Path(
+                        roundedRect: rect,
+                        cornerRadius: barWidth * 0.5,
+                        style: .continuous
+                    )
 
-                    Capsule(style: .continuous)
-                        .fill(
-                            LinearGradient(
-                                colors: [
-                                    Color.white.opacity(0.90),
-                                    Color.white.opacity(0.70),
-                                    Color.white.opacity(0.22),
-                                ],
-                                startPoint: .top,
-                                endPoint: .bottom
-                            )
+                    context.opacity = opacity
+                    context.fill(
+                        path,
+                        with: .linearGradient(
+                            Gradient(stops: [
+                                .init(color: Color.white.opacity(0.58), location: 0),
+                                .init(color: Color.white.opacity(0.98), location: 0.50),
+                                .init(color: Color.white.opacity(0.58), location: 1),
+                            ]),
+                            startPoint: CGPoint(x: rect.midX, y: rect.minY),
+                            endPoint: CGPoint(x: rect.midX, y: rect.maxY)
                         )
-                        .frame(
-                            width: barWidth,
-                            height: max(minimumHeight, geometry.size.height * visualLevel)
-                        )
-                        .animation(.easeOut(duration: 0.04), value: visualLevel)
+                    )
                 }
             }
-            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
-            .mask(edgeFadeMask)
         }
     }
 
-    private var edgeFadeMask: some View {
-        LinearGradient(
-            stops: [
-                .init(color: .clear, location: 0),
-                .init(color: .white.opacity(0.28), location: 0.08),
-                .init(color: .white, location: 0.20),
-                .init(color: .white, location: 0.80),
-                .init(color: .white.opacity(0.28), location: 0.92),
-                .init(color: .clear, location: 1),
-            ],
-            startPoint: .leading,
-            endPoint: .trailing
-        )
+    private func activeWaveWidth(for totalWidth: CGFloat) -> CGFloat {
+        let preferredWidth = totalWidth * 0.57
+        return max(250, min(preferredWidth, 470))
     }
 
-    private func sampledLevels(forWidth width: CGFloat) -> [CGFloat] {
-        let barCount = max(100, min(260, Int(width / 3.2)))
-        guard !levels.isEmpty else {
-            return Array(repeating: 0.005, count: barCount)
-        }
-
-        let bucketSize = Double(levels.count) / Double(barCount)
-        var samples: [CGFloat] = []
-        samples.reserveCapacity(barCount)
-
-        for barIndex in 0..<barCount {
-            let start = Int(floor(Double(barIndex) * bucketSize))
-            let end = max(start + 1, Int(ceil(Double(barIndex + 1) * bucketSize)))
-            let slice = levels[start..<min(end, levels.count)]
-            let average = slice.reduce(0, +) / CGFloat(slice.count)
-            let peak = slice.max() ?? average
-            samples.append((average * 0.40) + (peak * 0.60))
-        }
-
-        return smooth(samples)
-    }
-
-    private func smooth(_ values: [CGFloat]) -> [CGFloat] {
-        guard values.count > 2 else { return values }
-
-        var smoothed = values
-        for index in values.indices {
-            let prev = values[max(0, index - 1)]
-            let curr = values[index]
-            let next = values[min(values.count - 1, index + 1)]
-            smoothed[index] = (prev * 0.20) + (curr * 0.60) + (next * 0.20)
-        }
-        return smoothed
-    }
-
-    private func normalizedLevel(for level: CGFloat) -> CGFloat {
+    private func visualLevel(for level: CGFloat) -> CGFloat {
         let clamped = max(0, min(level, 1.0))
-        // Gate low-level noise then re-normalize, creating dramatic contrast
-        let gated = max(0, clamped - 0.06) / 0.94
-        let expanded = pow(gated, 0.62)
-        return max(0.003, min(expanded, 0.96))
+        return min(pow(clamped, 0.92), 0.94)
+    }
+
+    private func edgeOpacity(for progress: CGFloat) -> Double {
+        let fadeLength: CGFloat = 0.20
+        let distanceToNearestEdge = min(progress, 1 - progress)
+        let normalized = min(max(distanceToNearestEdge / fadeLength, 0), 1)
+        let eased = normalized * normalized * (3 - (2 * normalized))
+        return Double(eased)
     }
 }

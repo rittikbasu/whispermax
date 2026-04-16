@@ -5,9 +5,9 @@ import SwiftUI
 @MainActor
 final class RecorderPanelController {
     private let panel: NSPanel
-    private let panelHeight: CGFloat = 220
-    private let minPanelWidth: CGFloat = 760
-    private let maxPanelWidth: CGFloat = 920
+    private let panelHeight: CGFloat = 176
+    private let minPanelWidth: CGFloat = 560
+    private let maxPanelWidth: CGFloat = 760
 
     init(controller: AppController) {
         let rootView = RecorderPanelView()
@@ -61,13 +61,13 @@ final class RecorderPanelController {
             ?? NSScreen.screens.first
         guard let frame = targetScreen?.visibleFrame else { return }
 
-        let widthBase = frontmostWindowFrame.map { $0.width * 0.82 } ?? (frame.width - 240)
+        let widthBase = frontmostWindowFrame.map { $0.width * 0.64 } ?? (frame.width - 360)
         let width = max(minPanelWidth, min(maxPanelWidth, widthBase))
         let anchorMidX = frontmostWindowFrame?.midX ?? frame.midX
         let originX = min(max(anchorMidX - width / 2, frame.minX + 26), frame.maxX - width - 26)
         let origin = NSPoint(
             x: originX,
-            y: frame.maxY - panelHeight - 34
+            y: frame.maxY - panelHeight - 28
         )
 
         panel.setFrame(NSRect(origin: origin, size: NSSize(width: width, height: panelHeight)), display: false)

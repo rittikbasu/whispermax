@@ -1,3 +1,4 @@
+import AVFoundation
 import Foundation
 import whisper
 
@@ -45,7 +46,7 @@ actor WhisperEngine {
             throw EngineError.initializationFailed
         }
 
-        let samples = try decodePCM16WaveFile(audioURL)
+        let samples = try decodeAudioFile(audioURL)
         let maxThreads = max(1, min(8, ProcessInfo.processInfo.processorCount - 2))
 
         var fullParams = whisper_full_default_params(WHISPER_SAMPLING_GREEDY)
@@ -85,16 +86,86 @@ actor WhisperEngine {
     }
 }
 
-private func decodePCM16WaveFile(_ url: URL) throws -> [Float] {
-    let data = try Data(contentsOf: url)
-    guard data.count > 44 else {
+private func decodeAudioFile(_ url: URL) throws -> [Float] {
+    let audioFile = try AVAudioFile(forReading: url)
+    let sourceFormat = audioFile.processingFormat
+    let sourceFrameCount = AVAudioFrameCount(audioFile.length)
+
+    guard
+        sourceFrameCount > 0,
+        let sourceBuffer = AVAudioPCMBuffer(pcmFormat: sourceFormat, frameCapacity: sourceFrameCount)
+    else {
         return []
     }
 
-    return stride(from: 44, to: data.count, by: 2).map { index in
-        data[index..<(index + 2)].withUnsafeBytes { rawBuffer in
-            let value = Int16(littleEndian: rawBuffer.load(as: Int16.self))
-            return max(-1.0, min(Float(value) / 32767.0, 1.0))
-        }
+    try audioFile.read(into: sourceBuffer)
+
+    guard
+        let targetFormat = AVAudioFormat(
+            commonFormat: .pcmFormatFloat32,
+            sampleRate: 16_000,
+            channels: 1,
+            interleaved: false
+        )
+    else {
+        return []
     }
+
+    if
+        sourceFormat.sampleRate == targetFormat.sampleRate,
+        sourceFormat.channelCount == targetFormat.channelCount,
+        sourceFormat.commonFormat == targetFormat.commonFormat,
+        sourceFormat.isInterleaved == targetFormat.isInterleaved,
+        let channelData = sourceBuffer.floatChannelData
+    {
+        return Array(
+            UnsafeBufferPointer(
+                start: channelData[0],
+                count: Int(sourceBuffer.frameLength)
+            )
+        )
+    }
+
+    guard let converter = AVAudioConverter(from: sourceFormat, to: targetFormat) else {
+        return []
+    }
+
+    let outputFrameCapacity = AVAudioFrameCount(
+        ceil(Double(sourceBuffer.frameLength) * targetFormat.sampleRate / sourceFormat.sampleRate)
+    ) + 4_096
+
+    guard let outputBuffer = AVAudioPCMBuffer(
+        pcmFormat: targetFormat,
+        frameCapacity: outputFrameCapacity
+    ) else {
+        return []
+    }
+
+    var hasProvidedInput = false
+    var conversionError: NSError?
+    converter.convert(to: outputBuffer, error: &conversionError) { _, outStatus in
+        if hasProvidedInput {
+            outStatus.pointee = .endOfStream
+            return nil
+        }
+
+        hasProvidedInput = true
+        outStatus.pointee = .haveData
+        return sourceBuffer
+    }
+
+    if conversionError != nil {
+        return []
+    }
+
+    guard let channelData = outputBuffer.floatChannelData else {
+        return []
+    }
+
+    return Array(
+        UnsafeBufferPointer(
+            start: channelData[0],
+            count: Int(outputBuffer.frameLength)
+        )
+    )
 }

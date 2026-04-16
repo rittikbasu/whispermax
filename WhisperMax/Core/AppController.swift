@@ -3,6 +3,12 @@ import CoreAudio
 import Foundation
 import Observation
 
+private enum WaveformHistory {
+    static let sampleCount = 84
+    static let activeFloor: CGFloat = 0.0012
+    static let idleFloor: CGFloat = 0.0008
+}
+
 enum InsertionMethod: String, Codable, Equatable {
     case accessibility = "Direct Insert"
     case clipboard = "Clipboard Fallback"
@@ -59,7 +65,10 @@ final class AppController {
     var phaseDidChange: ((RecordingPhase) -> Void)?
 
     var sidebarSelection: SidebarSelection = .home
-    var waveformLevels: [CGFloat] = Array(repeating: 0.012, count: 128)
+    var waveformLevels: [CGFloat] = Array(
+        repeating: WaveformHistory.idleFloor,
+        count: WaveformHistory.sampleCount
+    )
     var recordingDuration: TimeInterval = 0
     var lastTranscript: String = ""
     var searchText: String = ""
@@ -592,16 +601,21 @@ final class AppController {
 
     private func pushWaveform(level: CGFloat) {
         let clampedLevel = max(0, min(level, 1.0))
-        let previous = waveformLevels.last ?? 0.010
-        let smoothedLevel = (previous * 0.12) + (clampedLevel * 0.88)
+        let previous = waveformLevels.last ?? WaveformHistory.activeFloor
+        let gatedLevel = clampedLevel < 0.015 ? 0 : clampedLevel
+        let responsiveness: CGFloat = gatedLevel > previous ? 0.34 : 0.20
+        let smoothedLevel = previous + (gatedLevel - previous) * responsiveness
         waveformLevels.append(smoothedLevel)
-        if waveformLevels.count > 128 {
-            waveformLevels.removeFirst(waveformLevels.count - 128)
+        if waveformLevels.count > WaveformHistory.sampleCount {
+            waveformLevels.removeFirst(waveformLevels.count - WaveformHistory.sampleCount)
         }
     }
 
     private func resetWaveform(active: Bool) {
-        waveformLevels = Array(repeating: active ? 0.010 : 0.008, count: 128)
+        waveformLevels = Array(
+            repeating: active ? WaveformHistory.activeFloor : WaveformHistory.idleFloor,
+            count: WaveformHistory.sampleCount
+        )
     }
 
     private func setError(_ message: String) {

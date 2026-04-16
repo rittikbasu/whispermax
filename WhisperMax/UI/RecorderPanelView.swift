@@ -2,6 +2,7 @@ import SwiftUI
 
 private enum RecorderTheme {
     static let statusRecording = Color(red: 0.32, green: 0.82, blue: 0.56)
+    static let statusInserted = Color(red: 0.33, green: 0.54, blue: 0.90)
     static let shellTop = Color(red: 0.038, green: 0.039, blue: 0.045)
     static let shellBottom = Color(red: 0.025, green: 0.026, blue: 0.031)
     static let waveTop = Color(red: 0.043, green: 0.044, blue: 0.05)
@@ -18,11 +19,11 @@ struct RecorderPanelView: View {
 
     var body: some View {
         GeometryReader { proxy in
-            let outerHorizontalPadding: CGFloat = 12
-            let outerVerticalPadding: CGFloat = 12
-            let cornerRadius = min(max(proxy.size.height * 0.15, 22), 28)
+            let outerHorizontalPadding: CGFloat = 8
+            let outerVerticalPadding: CGFloat = 8
+            let cornerRadius = min(max(proxy.size.height * 0.14, 20), 24)
             let contentHeight = proxy.size.height - (outerVerticalPadding * 2)
-            let waveHeight = max(120, contentHeight * 0.67)
+            let waveHeight = max(92, contentHeight * 0.58)
 
             ZStack {
                 RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
@@ -93,16 +94,16 @@ private struct RecorderWaveStage: View {
             .blendMode(.screen)
 
             WaveformBarsView(levels: levels)
-                .padding(.horizontal, 58)
-                .padding(.top, 16)
-                .padding(.bottom, 12)
+                .padding(.horizontal, 18)
+                .padding(.top, 12)
+                .padding(.bottom, 10)
         }
         .overlay(alignment: .topTrailing) {
             Image(systemName: "arrow.up.left.and.arrow.down.right")
-                .font(.system(size: 11, weight: .semibold))
+                .font(.system(size: 10, weight: .semibold))
                 .foregroundStyle(.white.opacity(0.13))
-                .padding(.top, 15)
-                .padding(.trailing, 18)
+                .padding(.top, 12)
+                .padding(.trailing, 14)
         }
     }
 }
@@ -115,19 +116,20 @@ private struct RecorderControlRail: View {
     let cancel: () -> Void
 
     var body: some View {
-        HStack(spacing: 14) {
+        HStack(spacing: 12) {
             RecorderStatusDot(color: statusDotColor, isRecording: phase == .recording)
 
             leadContent
 
             Spacer(minLength: 18)
 
-            if case .recording = phase {
-                RecorderActionStrip(stop: stop, cancel: cancel)
-            }
+            RecorderActionStrip(stop: stop, cancel: cancel)
+                .opacity(showsActionStrip ? 1 : 0)
+                .allowsHitTesting(showsActionStrip)
+                .accessibilityHidden(!showsActionStrip)
         }
-        .padding(.horizontal, 18)
-        .padding(.vertical, 13)
+        .padding(.horizontal, 16)
+        .padding(.vertical, 11)
         .background(
             LinearGradient(
                 colors: [RecorderTheme.railTop, RecorderTheme.railBottom],
@@ -144,18 +146,15 @@ private struct RecorderControlRail: View {
             HStack(spacing: 10) {
                 Text(duration)
                     .monospacedDigit()
-                    .font(.system(size: 15, weight: .semibold))
+                    .font(.system(size: 16, weight: .semibold))
                     .foregroundStyle(.white.opacity(0.96))
 
                 RecorderKeyBadge(text: hotkeyText)
             }
         case .transcribing:
-            RecorderStateLabel(title: "Transcribing", subtitle: "Local Whisper")
+            RecorderStateLabel(title: "Transcribing")
         case .inserted(let method):
-            RecorderStateLabel(
-                title: method == .accessibility ? "Inserted" : "Pasted",
-                subtitle: method == .accessibility ? "Directly into app" : "Clipboard fallback"
-            )
+            RecorderStateLabel(title: method == .accessibility ? "Inserted" : "Pasted")
         case .error:
             RecorderStateLabel(title: "Try again", subtitle: "Recorder reset")
         case .loadingModel:
@@ -167,10 +166,17 @@ private struct RecorderControlRail: View {
         switch phase {
         case .recording: RecorderTheme.statusRecording
         case .transcribing: Color(red: 0.91, green: 0.73, blue: 0.28)
-        case .inserted: Color(red: 0.30, green: 0.78, blue: 0.52)
+        case .inserted: RecorderTheme.statusInserted
         case .error: Color(red: 0.93, green: 0.38, blue: 0.34)
         default: Color.white.opacity(0.24)
         }
+    }
+
+    private var showsActionStrip: Bool {
+        if case .recording = phase {
+            return true
+        }
+        return false
     }
 }
 
@@ -183,9 +189,9 @@ private struct RecorderStatusDot: View {
     var body: some View {
         Circle()
             .fill(color)
-            .frame(width: 9, height: 9)
-            .shadow(color: color.opacity(pulsing ? 0.80 : 0.40), radius: pulsing ? 11 : 5)
-            .scaleEffect(pulsing ? 1.3 : 1.0)
+            .frame(width: 8, height: 8)
+            .shadow(color: color.opacity(pulsing ? 0.78 : 0.38), radius: pulsing ? 10 : 4)
+            .scaleEffect(pulsing ? 1.26 : 1.0)
             .onAppear {
                 guard isRecording else { return }
                 withAnimation(.easeInOut(duration: 0.85).repeatForever(autoreverses: true)) {
@@ -208,16 +214,24 @@ private struct RecorderStatusDot: View {
 
 private struct RecorderStateLabel: View {
     let title: String
-    let subtitle: String
+    let subtitle: String?
+
+    init(title: String, subtitle: String? = nil) {
+        self.title = title
+        self.subtitle = subtitle
+    }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 2) {
+        VStack(alignment: .leading, spacing: subtitle == nil ? 0 : 2) {
             Text(title)
                 .font(.system(size: 14, weight: .semibold))
                 .foregroundStyle(.white.opacity(0.90))
-            Text(subtitle)
-                .font(.system(size: 11, weight: .medium))
-                .foregroundStyle(RecorderTheme.mutedText)
+
+            if let subtitle {
+                Text(subtitle)
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(RecorderTheme.mutedText)
+            }
         }
     }
 }
@@ -240,6 +254,7 @@ private struct RecorderActionStrip: View {
 
             RecorderKeyBadge(text: "Esc")
         }
+        .frame(height: 38)
     }
 }
 
@@ -261,10 +276,10 @@ private struct RecorderKeyBadge: View {
 
     var body: some View {
         Text(text)
-            .font(.system(size: 13, weight: .semibold))
+            .font(.system(size: 12, weight: .semibold))
             .foregroundStyle(.white.opacity(0.82))
-            .padding(.horizontal, 12)
-            .padding(.vertical, 7)
+            .padding(.horizontal, 11)
+            .padding(.vertical, 6)
             .background(
                 Capsule(style: .continuous)
                     .fill(
