@@ -13,7 +13,10 @@ struct WhisperMaxApp: App {
         .defaultSize(width: 1120, height: 840)
         .windowStyle(.hiddenTitleBar)
 
-        MenuBarExtra("whispermax", image: "WhisperMaxMenuBarMark") {
+        MenuBarExtra("whispermax", image: "WhisperMaxMenuBarMark", isInserted: Binding(
+            get: { appDelegate.controller.hasCompletedOnboarding },
+            set: { _ in }
+        )) {
             MenuBarView()
                 .environment(appDelegate.controller)
         }
