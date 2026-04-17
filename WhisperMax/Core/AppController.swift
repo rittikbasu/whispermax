@@ -119,6 +119,7 @@ final class AppController {
     private var preRecordingSystemDefaultInputDeviceID: AudioObjectID?
     private var recordingPinnedDeviceID: AudioObjectID?
     private var permissionMonitorTask: Task<Void, Never>?
+    private var permissionMonitorBoostUntil: Date?
     private var accessibilityNotificationObserver: NSObjectProtocol?
     private var menuFeedbackResetTask: Task<Void, Never>?
     private var pendingDeleteResetTask: Task<Void, Never>?
@@ -513,10 +514,12 @@ final class AppController {
     }
 
     func refreshPermissions() {
+        boostPermissionMonitoring(for: 2.5)
         syncPermissionState()
     }
 
     func promptForAccessibility() {
+        boostPermissionMonitoring(for: 10)
         permissionsManager.promptForAccessibility()
         refreshPermissions()
     }
@@ -568,6 +571,7 @@ final class AppController {
     }
 
     func openAccessibilitySettings() {
+        boostPermissionMonitoring(for: 10)
         permissionsManager.openAccessibilitySettings()
         refreshPermissions()
     }
@@ -792,10 +796,23 @@ final class AppController {
 
         permissionMonitorTask = Task { @MainActor [weak self] in
             while !Task.isCancelled {
-                self?.syncPermissionState()
-                try? await Task.sleep(for: .milliseconds(1500))
+                guard let self else { return }
+                self.syncPermissionState()
+
+                let isBoostActive = (self.permissionMonitorBoostUntil ?? .distantPast) > Date()
+                let intervalMilliseconds: UInt64 = (isBoostActive || !self.accessibilityGranted) ? 350 : 1500
+                try? await Task.sleep(for: .milliseconds(intervalMilliseconds))
             }
         }
+    }
+
+    private func boostPermissionMonitoring(for duration: TimeInterval) {
+        let nextDeadline = Date().addingTimeInterval(duration)
+        if let existingDeadline = permissionMonitorBoostUntil, existingDeadline > nextDeadline {
+            return
+        }
+
+        permissionMonitorBoostUntil = nextDeadline
     }
 
     private func schedulePendingDeletionDismissal() {

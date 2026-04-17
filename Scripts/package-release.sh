@@ -7,6 +7,7 @@ SCHEME="WhisperMax"
 CONFIGURATION="Release"
 DIST_DIR="$ROOT_DIR/dist"
 FRAMEWORK_DIR="$ROOT_DIR/Vendor/whisper.xcframework"
+SIGNING_IDENTITY="${WHISPERMAX_RELEASE_SIGNING_IDENTITY:-${WHISPERMAX_SIGNING_IDENTITY:-}}"
 
 require_command() {
   local command_name="$1"
@@ -25,6 +26,7 @@ require_command xcodegen
 require_command xcodebuild
 require_command ditto
 require_command shasum
+require_command security
 
 PRODUCT_NAME="$(yaml_value PRODUCT_NAME)"
 VERSION="$(yaml_value MARKETING_VERSION)"
@@ -36,6 +38,10 @@ if [[ -z "$PRODUCT_NAME" || -z "$VERSION" || -z "$BUILD_NUMBER" ]]; then
 fi
 
 cd "$ROOT_DIR"
+
+if [[ -z "$SIGNING_IDENTITY" ]]; then
+  SIGNING_IDENTITY="$(security find-identity -v -p codesigning | awk -F '\"' '/Apple Development/ { print $2; exit }')"
+fi
 
 xcodegen generate >/dev/null
 
@@ -75,9 +81,15 @@ rm -f "$ZIP_PATH" "$CHECKSUM_PATH"
 
 ditto "$APP_PATH" "$STAGED_APP_PATH"
 
-# Ad-hoc sign the staged app so the bundle is internally consistent without
-# requiring a paid Apple Developer account.
-/usr/bin/codesign --force --deep --sign - "$STAGED_APP_PATH" >/dev/null 2>&1 || true
+if [[ -n "$SIGNING_IDENTITY" ]]; then
+  /usr/bin/codesign --force --deep --sign "$SIGNING_IDENTITY" "$STAGED_APP_PATH"
+  SIGNING_LABEL="$SIGNING_IDENTITY"
+else
+  # Fall back to ad-hoc signing so the bundle remains internally consistent
+  # even when no Apple Development identity is available.
+  /usr/bin/codesign --force --deep --sign - "$STAGED_APP_PATH" >/dev/null 2>&1 || true
+  SIGNING_LABEL="ad-hoc"
+fi
 
 ditto -c -k --sequesterRsrc --keepParent "$STAGED_APP_PATH" "$ZIP_PATH"
 
@@ -87,3 +99,4 @@ printf '%s  %s\n' "$CHECKSUM" "$(basename "$ZIP_PATH")" > "$CHECKSUM_PATH"
 echo "Created $ZIP_PATH"
 echo "SHA256 $CHECKSUM"
 echo "Version $VERSION ($BUILD_NUMBER)"
+echo "Signed with $SIGNING_LABEL"
