@@ -233,7 +233,7 @@ private struct WindowHeader: View {
             default: return "Good evening"
             }
         case .dictionary:
-            return "Word Dictionary"
+            return "Dictionary"
         case .settings:
             return "Settings"
         }
@@ -982,7 +982,7 @@ private struct DictionaryEmptyState: View {
                     HStack(spacing: 10) {
                         DictionaryExampleChip(text: "Codex", addAction: addAction)
                         DictionaryExampleChip(text: "Claude Code", addAction: addAction)
-                        DictionaryExampleChip(text: "Groq", addAction: addAction)
+                        DictionaryExampleChip(text: "SQLite", addAction: addAction)
                     }
                 }
             }
