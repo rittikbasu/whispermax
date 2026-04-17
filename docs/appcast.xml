@@ -1,0 +1,34 @@
+<?xml version="1.0" standalone="yes"?>
+<rss xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle" version="2.0">
+    <channel>
+        <title>whispermax</title>
+        <item>
+            <title>0.1.0</title>
+            <pubDate>Sat, 18 Apr 2026 04:50:36 +0530</pubDate>
+            <link>https://github.com/rittikbasu/whispermax</link>
+            <sparkle:fullReleaseNotesLink>https://github.com/rittikbasu/whispermax/releases/tag/v0.1.0</sparkle:fullReleaseNotesLink>
+            <sparkle:version>1</sparkle:version>
+            <sparkle:shortVersionString>0.1.0</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
+            <sparkle:hardwareRequirements>arm64</sparkle:hardwareRequirements>
+            <description sparkle:format="markdown"><![CDATA[## whispermax v0.1.0
+
+i wanted a fast local dictation app i could trust, so i built whispermax.
+
+- fully local dictation with whisper large v3 turbo
+- compact floating recorder ui
+- fast global hotkey workflow
+- direct insertion across many native apps and browser text boxes
+- honest fallback to copied to clipboard when insertion can’t be trusted
+- searchable transcript history
+- dictionary for custom names, products, and phrases
+- simple onboarding for model, permissions, and hotkey setup
+
+notes:
+- this release is local-first and built around one model
+- the app is currently not notarized, so macos may ask you to open it manually the first time
+]]></description>
+            <enclosure url="https://github.com/rittikbasu/whispermax/releases/download/v0.1.0/whispermax-v0.1.0-macos.zip" length="4785548" type="application/octet-stream" sparkle:edSignature="DOIn2cHR1vM5+dQD7AaXYn/7eTA71C0WvO07rMvjl6brogTVXVQEAuNn3aWwgSaspaWU6wfDnwpxaf7sCR4KDw=="/>
+        </item>
+    </channel>
+</rss>

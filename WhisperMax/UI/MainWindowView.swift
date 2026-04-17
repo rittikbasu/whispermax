@@ -1165,27 +1165,93 @@ private struct SettingsSection: View {
         VStack(alignment: .leading, spacing: 14) {
             SectionHeader(title: "SETTINGS")
 
-            VStack(alignment: .leading, spacing: 16) {
-                SettingRow(label: "Hotkey", value: controller.hotkeyDisplay)
-                SettingRow(label: "Model", value: controller.modelDisplayName)
-                SettingRow(label: "Model Path", value: controller.modelPath)
-                SettingRow(label: "Input Preference", value: controller.preferredInputDisplayName)
-                SettingRow(label: "Active Input", value: controller.activeInputDisplayName)
-                SettingRow(label: "Accessibility", value: controller.accessibilityGranted ? "Granted" : "Not Granted")
-                SettingRow(label: "Microphone", value: controller.microphoneGranted ? "Granted" : "Not Granted")
+            VStack(alignment: .leading, spacing: 18) {
+                VStack(alignment: .leading, spacing: 16) {
+                    SettingRow(label: "Hotkey", value: controller.hotkeyDisplay)
+                    SettingRow(label: "Model", value: controller.modelDisplayName)
+                    SettingRow(label: "Model Path", value: controller.modelPath)
+                    SettingRow(label: "Input Preference", value: controller.preferredInputDisplayName)
+                    SettingRow(label: "Active Input", value: controller.activeInputDisplayName)
+                    SettingRow(label: "Accessibility", value: controller.accessibilityGranted ? "Granted" : "Not Granted")
+                    SettingRow(label: "Microphone", value: controller.microphoneGranted ? "Granted" : "Not Granted")
 
-                HStack(spacing: 10) {
-                    Button("Prompt Accessibility Again", action: controller.promptForAccessibility)
-                        .buttonStyle(PanelButtonStyle(prominent: false))
-                    Button("Open Microphone Settings", action: controller.openMicrophoneSettings)
-                        .buttonStyle(PanelButtonStyle(prominent: false))
-                    Button("Refresh Permissions", action: controller.refreshPermissions)
-                        .buttonStyle(PanelButtonStyle(prominent: false))
+                    HStack(spacing: 10) {
+                        Button("Prompt Accessibility Again", action: controller.promptForAccessibility)
+                            .buttonStyle(PanelButtonStyle(prominent: false))
+                        Button("Open Microphone Settings", action: controller.openMicrophoneSettings)
+                            .buttonStyle(PanelButtonStyle(prominent: false))
+                        Button("Refresh Permissions", action: controller.refreshPermissions)
+                            .buttonStyle(PanelButtonStyle(prominent: false))
+                    }
+                }
+
+                Rectangle()
+                    .fill(Color.white.opacity(0.05))
+                    .frame(height: 1)
+
+                VStack(alignment: .leading, spacing: 14) {
+                    HStack(alignment: .firstTextBaseline) {
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text("UPDATES")
+                                .font(.system(size: 10, weight: .semibold))
+                                .tracking(1.6)
+                                .foregroundStyle(.white.opacity(0.34))
+                            Text(controller.appVersionDisplay)
+                                .font(.system(size: 13, weight: .regular))
+                                .foregroundStyle(.white.opacity(0.88))
+                        }
+
+                        Spacer()
+
+                        Button("Check for Updates…", action: controller.checkForUpdates)
+                            .buttonStyle(PanelButtonStyle(prominent: true))
+                            .disabled(!controller.canCheckForUpdates)
+                    }
+
+                    VStack(alignment: .leading, spacing: 10) {
+                        Toggle(isOn: Binding(
+                            get: { controller.automaticallyChecksForUpdates },
+                            set: { controller.setAutomaticallyChecksForUpdates($0) }
+                        )) {
+                            VStack(alignment: .leading, spacing: 3) {
+                                Text("Automatically check for updates")
+                                    .font(.system(size: 13, weight: .medium))
+                                    .foregroundStyle(.white.opacity(0.84))
+                                Text(controller.updateStatusDescription)
+                                    .font(.system(size: 12, weight: .regular))
+                                    .foregroundStyle(.white.opacity(0.42))
+                            }
+                        }
+                        .toggleStyle(SwitchToggleStyle(tint: Theme.dictionaryAccent))
+
+                        if controller.automaticallyChecksForUpdates {
+                            UpdateCadenceControl(
+                                selectedCadence: controller.updateCheckCadence,
+                                onSelect: controller.setUpdateCheckCadence
+                            )
+                        }
+                    }
                 }
             }
             .padding(.horizontal, 22)
             .padding(.vertical, 20)
             .background(PanelCardBackground(cornerRadius: 16))
+        }
+    }
+}
+
+private struct UpdateCadenceControl: View {
+    let selectedCadence: UpdateCheckCadence
+    let onSelect: (UpdateCheckCadence) -> Void
+
+    var body: some View {
+        HStack(spacing: 8) {
+            ForEach(UpdateCheckCadence.allCases) { cadence in
+                Button(cadence.label) {
+                    onSelect(cadence)
+                }
+                .buttonStyle(UpdateCadenceButtonStyle(isSelected: selectedCadence == cadence))
+            }
         }
     }
 }
@@ -1276,6 +1342,37 @@ private struct PanelButtonStyle: ButtonStyle {
                     .overlay(
                         RoundedRectangle(cornerRadius: 10, style: .continuous)
                             .stroke(Color.white.opacity(0.08), lineWidth: 1)
+                    )
+            )
+            .scaleEffect(configuration.isPressed ? 0.985 : 1)
+            .animation(.easeOut(duration: 0.14), value: configuration.isPressed)
+    }
+}
+
+private struct UpdateCadenceButtonStyle: ButtonStyle {
+    let isSelected: Bool
+
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .font(.system(size: 11.5, weight: .medium))
+            .foregroundStyle(.white.opacity(isSelected ? 0.94 : 0.62))
+            .padding(.horizontal, 12)
+            .frame(height: 30)
+            .background(
+                Capsule(style: .continuous)
+                    .fill(
+                        isSelected
+                            ? Theme.dictionaryAccentFill.opacity(configuration.isPressed ? 0.88 : 1)
+                            : Color.white.opacity(configuration.isPressed ? 0.08 : 0.04)
+                    )
+                    .overlay(
+                        Capsule(style: .continuous)
+                            .stroke(
+                                isSelected
+                                    ? Theme.dictionaryAccentStroke
+                                    : Color.white.opacity(0.08),
+                                lineWidth: 1
+                            )
                     )
             )
             .scaleEffect(configuration.isPressed ? 0.985 : 1)

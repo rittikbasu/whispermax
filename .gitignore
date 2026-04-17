@@ -3,5 +3,4 @@ Vendor/whisper.xcframework
 build
 DerivedData
 dist/
-docs/
 .DS_Store

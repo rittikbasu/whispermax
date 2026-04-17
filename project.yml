@@ -15,14 +15,13 @@ settings:
     SWIFT_VERSION: 6.0
     MACOSX_DEPLOYMENT_TARGET: "14.0"
     ENABLE_DEBUG_DYLIB: NO
-    GENERATE_INFOPLIST_FILE: YES
-    INFOPLIST_KEY_CFBundleDisplayName: whispermax
-    INFOPLIST_KEY_CFBundleShortVersionString: $(MARKETING_VERSION)
-    INFOPLIST_KEY_CFBundleVersion: $(CURRENT_PROJECT_VERSION)
-    INFOPLIST_KEY_LSUIElement: YES
-    INFOPLIST_KEY_NSMicrophoneUsageDescription: whispermax records your voice for local transcription.
-    INFOPLIST_KEY_NSAccessibilityUsageDescription: whispermax needs Accessibility access to insert transcriptions into other apps.
+    GENERATE_INFOPLIST_FILE: NO
+    INFOPLIST_FILE: WhisperMax/Info.plist
     CLANG_CXX_LANGUAGE_STANDARD: "gnu++20"
+packages:
+  Sparkle:
+    url: https://github.com/sparkle-project/Sparkle
+    from: 2.9.1
 targets:
   WhisperMax:
     type: application
@@ -30,5 +29,6 @@ targets:
     sources:
       - path: WhisperMax
     dependencies:
+      - package: Sparkle
       - framework: Vendor/whisper.xcframework
         embed: true

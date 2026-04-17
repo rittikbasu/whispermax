@@ -2,10 +2,16 @@ import AppKit
 
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
-    let controller = AppController()
+    let updateController = AppUpdateController()
+    let controller: AppController
 
     private var hotkeyMonitor: GlobalHotkeyMonitor?
     private var recorderPanelController: RecorderPanelController?
+
+    override init() {
+        controller = AppController(updateController: updateController)
+        super.init()
+    }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)

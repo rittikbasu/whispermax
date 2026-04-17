@@ -111,6 +111,7 @@ final class AppController {
     private let wordDictionaryStore = WordDictionaryStore()
     private let inputDeviceService = AudioInputDeviceService()
     private let inputPreferenceStore = AudioInputPreferenceStore()
+    private let updateController: AppUpdateController
     let permissionsManager = PermissionsManager()
     private let insertionService = TextInsertionService()
     private let recorder = AudioRecorderService()
@@ -333,11 +334,16 @@ final class AppController {
     var inputPreference: AudioInputPreference = .systemDefault
     var menuFeedbackMessage: String?
     var pendingTranscriptDeletion: PendingTranscriptDeletion?
+    var canCheckForUpdates = false
+    var automaticallyChecksForUpdates = false
+    var updateCheckCadence: UpdateCheckCadence = .everyTwelveHours
 
-    init() {
+    init(updateController: AppUpdateController = AppUpdateController()) {
+        self.updateController = updateController
         configureRecorderCallbacks()
         configureInputDeviceObservation()
         configurePermissionObservation()
+        configureUpdateObservation()
     }
 
     var filteredHistory: [TranscriptEntry] {
@@ -424,6 +430,16 @@ final class AppController {
         }
     }
 
+    var appVersionDisplay: String {
+        let shortVersion = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "0.1.0"
+        let buildVersion = Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "1"
+        return "\(shortVersion) (\(buildVersion))"
+    }
+
+    var updateStatusDescription: String {
+        automaticallyChecksForUpdates ? "Checks every \(updateCheckCadence.label)" : "Manual only"
+    }
+
     var menuPrimaryActionTitle: String {
         switch phase {
         case .loadingModel:
@@ -503,6 +519,7 @@ final class AppController {
         refreshInputDevices()
         refreshPermissions()
         startPermissionMonitoring()
+        syncUpdateState()
         statusText = idleStatusText
 
         guard hasCompletedOnboarding else { return }
@@ -578,6 +595,18 @@ final class AppController {
 
     func openMicrophoneSettings() {
         permissionsManager.openMicrophoneSettings()
+    }
+
+    func checkForUpdates() {
+        updateController.checkForUpdates()
+    }
+
+    func setAutomaticallyChecksForUpdates(_ enabled: Bool) {
+        updateController.setAutomaticallyChecksForUpdates(enabled)
+    }
+
+    func setUpdateCheckCadence(_ cadence: UpdateCheckCadence) {
+        updateController.setCadence(cadence)
     }
 
     func toggleRecording() async {
@@ -789,6 +818,14 @@ final class AppController {
         }
     }
 
+    private func configureUpdateObservation() {
+        updateController.onStateChange = { [weak self] in
+            Task { @MainActor [weak self] in
+                self?.syncUpdateState()
+            }
+        }
+    }
+
     private func startPermissionMonitoring() {
         guard permissionMonitorTask == nil else {
             return
@@ -813,6 +850,12 @@ final class AppController {
         }
 
         permissionMonitorBoostUntil = nextDeadline
+    }
+
+    private func syncUpdateState() {
+        canCheckForUpdates = updateController.canCheckForUpdates
+        automaticallyChecksForUpdates = updateController.automaticallyChecksForUpdates
+        updateCheckCadence = updateController.selectedCadence
     }
 
     private func schedulePendingDeletionDismissal() {

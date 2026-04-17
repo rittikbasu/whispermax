@@ -43,6 +43,11 @@ struct MenuBarView: View {
                     openMainWindow()
                 }
 
+                Button("Check for Updates…") {
+                    controller.checkForUpdates()
+                }
+                .disabled(!controller.canCheckForUpdates)
+
                 Menu {
                     if controller.inputDevices.isEmpty {
                         Text("No input devices available")
