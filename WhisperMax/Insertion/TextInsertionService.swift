@@ -145,10 +145,10 @@ final class TextInsertionService {
             let likelyPasteTarget = targetPrepared
                 ? likelyPasteTargetExists(for: target, referenceSnapshot: referenceSnapshot)
                 : false
-            return pasteOutcome.confirmed || likelyPasteTarget ? .clipboard : .copied
+            let finalMethod: InsertionMethod = pasteOutcome.confirmed || likelyPasteTarget ? .clipboard : .copied
+            return finalMethod
         }
 
-        copyToClipboard(text)
         return .copied
     }
 
@@ -184,10 +184,10 @@ final class TextInsertionService {
             let likelyPasteTarget = targetPrepared
                 ? likelyPasteTargetExists(for: target, referenceSnapshot: referenceSnapshot)
                 : false
-            return pasteOutcome.confirmed || likelyPasteTarget ? .clipboard : .copied
+            let finalMethod: InsertionMethod = pasteOutcome.confirmed || likelyPasteTarget ? .clipboard : .copied
+            return finalMethod
         }
 
-        copyToClipboard(text)
         return .copied
     }
 
@@ -289,22 +289,23 @@ final class TextInsertionService {
         settleDelayMilliseconds: UInt64 = 90
     ) async -> PasteDispatchOutcome {
         let pasteboard = NSPasteboard.general
-        let snapshot = snapshotPasteboard(pasteboard)
-
         pasteboard.clearContents()
         pasteboard.setString(text, forType: .string)
-        let temporaryChangeCount = pasteboard.changeCount
 
         guard targetPrepared else {
-            restorePasteboard(snapshot, to: pasteboard)
-            return PasteDispatchOutcome(dispatched: false, confirmed: false)
+            return PasteDispatchOutcome(
+                dispatched: false,
+                confirmed: false
+            )
         }
 
         try? await Task.sleep(for: .milliseconds(settleDelayMilliseconds))
 
         guard sendCommandV() else {
-            restorePasteboard(snapshot, to: pasteboard)
-            return PasteDispatchOutcome(dispatched: false, confirmed: false)
+            return PasteDispatchOutcome(
+                dispatched: false,
+                confirmed: false
+            )
         }
 
         let confirmed = await verifyInsertionApplied(
@@ -313,15 +314,10 @@ final class TextInsertionService {
             confirmationWindowMilliseconds: 280
         )
 
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) {
-            guard pasteboard.changeCount == temporaryChangeCount else {
-                return
-            }
-
-            self.restorePasteboard(snapshot, to: pasteboard)
-        }
-
-        return PasteDispatchOutcome(dispatched: true, confirmed: confirmed)
+        return PasteDispatchOutcome(
+            dispatched: true,
+            confirmed: confirmed
+        )
     }
 
     private func verifyInsertionApplied(
@@ -408,15 +404,8 @@ final class TextInsertionService {
         for target: InsertionTargetContext?,
         referenceSnapshot: FocusedElementSnapshot?
     ) -> Bool {
-        if focusSnapshotLooksLikeTextInsertionTarget(referenceSnapshot) {
-            return true
-        }
-
-        guard let target else {
-            return false
-        }
-
-        return targetMenuAdvertisesPasteEnabled(processIdentifier: target.processIdentifier)
+        _ = target
+        return focusSnapshotLooksLikeTextInsertionTarget(referenceSnapshot)
     }
 
     private func focusSnapshotLooksLikeTextInsertionTarget(_ snapshot: FocusedElementSnapshot?) -> Bool {
@@ -428,92 +417,35 @@ final class TextInsertionService {
             return true
         }
 
-        if let selectedRange = snapshot.selectedRange,
-           selectedRange.location != kCFNotFound {
+        if explicitTextInputRole(snapshot.role) {
             return true
         }
 
-        if let selectedText = snapshot.selectedText,
-           !selectedText.isEmpty {
+        if snapshot.webContent,
+           explicitTextInputRole(snapshot.subrole) {
             return true
         }
 
         return false
     }
 
-    private func targetMenuAdvertisesPasteEnabled(processIdentifier: pid_t) -> Bool {
-        let application = AXUIElementCreateApplication(processIdentifier)
-        guard let menuBar = axElementValue(
-            for: kAXMenuBarAttribute as CFString,
-            on: application
-        ) else {
+    private func explicitTextInputRole(_ role: String?) -> Bool {
+        guard let role else {
             return false
         }
 
-        return menuTreeContainsEnabledPaste(menuBar, depthRemaining: 8)
-    }
-
-    private func menuTreeContainsEnabledPaste(_ element: AXUIElement, depthRemaining: Int) -> Bool {
-        guard depthRemaining >= 0 else {
-            return false
-        }
-
-        if let commandChar = stringValue(for: kAXMenuItemCmdCharAttribute as CFString, on: element),
-           commandChar.lowercased() == "v",
-           let commandModifiers = numberValue(for: kAXMenuItemCmdModifiersAttribute as CFString, on: element),
-           commandModifiers == 0,
-           let enabled = boolValue(for: kAXEnabledAttribute as CFString, on: element),
-           enabled {
-            return true
-        }
-
-        if let menu = axElementValue(for: "AXMenu" as CFString, on: element),
-           menuTreeContainsEnabledPaste(menu, depthRemaining: depthRemaining - 1) {
-            return true
-        }
-
-        for child in axChildren(of: element) {
-            if menuTreeContainsEnabledPaste(child, depthRemaining: depthRemaining - 1) {
-                return true
-            }
-        }
-
-        for visibleChild in axElementsValue(for: kAXVisibleChildrenAttribute as CFString, on: element) {
-            if menuTreeContainsEnabledPaste(visibleChild, depthRemaining: depthRemaining - 1) {
-                return true
-            }
-        }
-
-        return false
+        return [
+            kAXTextFieldRole as String,
+            kAXTextAreaRole as String,
+            "AXSearchField",
+            kAXComboBoxRole as String,
+        ].contains(role)
     }
 
     private func copyToClipboard(_ text: String) {
         let pasteboard = NSPasteboard.general
         pasteboard.clearContents()
         pasteboard.setString(text, forType: .string)
-    }
-
-    private func snapshotPasteboard(_ pasteboard: NSPasteboard) -> [NSPasteboardItem] {
-        guard let items = pasteboard.pasteboardItems else {
-            return []
-        }
-
-        return items.map { item in
-            let copy = NSPasteboardItem()
-            for type in item.types {
-                if let data = item.data(forType: type) {
-                    copy.setData(data, forType: type)
-                }
-            }
-            return copy
-        }
-    }
-
-    private func restorePasteboard(_ items: [NSPasteboardItem], to pasteboard: NSPasteboard) {
-        pasteboard.clearContents()
-        if !items.isEmpty {
-            pasteboard.writeObjects(items)
-        }
     }
 
     private func prepareTargetForInsertion(
@@ -567,12 +499,15 @@ final class TextInsertionService {
             return nil
         }
 
-        let editable = isAttributeSettable(kAXSelectedTextAttribute as CFString, on: focusedElement)
-            || isAttributeSettable(kAXValueAttribute as CFString, on: focusedElement)
-            || isAttributeSettable(kAXSelectedTextRangeAttribute as CFString, on: focusedElement)
-            || focusedElementHasEditableRole(focusedElement)
-
         let webContent = focusedElementAppearsWebContent(focusedElement)
+        let editable = webContent
+            ? focusedElementAppearsEditableWebContent(focusedElement)
+            : (
+                isAttributeSettable(kAXSelectedTextAttribute as CFString, on: focusedElement)
+                    || isAttributeSettable(kAXValueAttribute as CFString, on: focusedElement)
+                    || isAttributeSettable(kAXSelectedTextRangeAttribute as CFString, on: focusedElement)
+                    || focusedElementHasEditableRole(focusedElement)
+            )
 
         return FocusedElementSnapshot(
             role: stringValue(for: kAXRoleAttribute as CFString, on: focusedElement),
@@ -624,6 +559,37 @@ final class TextInsertionService {
             if FileManager.default.fileExists(atPath: frameworkURL.path) {
                 return true
             }
+        }
+
+        return false
+    }
+
+    private func focusedElementAppearsEditableWebContent(_ focusedElement: AXUIElement) -> Bool {
+        var currentElement: AXUIElement? = focusedElement
+        var inspectedDepth = 0
+
+        while let element = currentElement, inspectedDepth < 6 {
+            let role = stringValue(for: kAXRoleAttribute as CFString, on: element)
+            let subrole = stringValue(for: kAXSubroleAttribute as CFString, on: element)
+
+            if explicitTextInputRole(role) || explicitTextInputRole(subrole) {
+                return true
+            }
+
+            if role != "AXWebArea" && (
+                isAttributeSettable(kAXSelectedTextAttribute as CFString, on: element)
+                    || isAttributeSettable(kAXValueAttribute as CFString, on: element)
+                    || isAttributeSettable(kAXSelectedTextRangeAttribute as CFString, on: element)
+            ) {
+                return true
+            }
+
+            if role == "AXWebArea" {
+                return false
+            }
+
+            currentElement = axElementValue(for: kAXParentAttribute as CFString, on: element)
+            inspectedDepth += 1
         }
 
         return false
@@ -709,32 +675,6 @@ final class TextInsertionService {
         }
 
         return string
-    }
-
-    private func numberValue(for attribute: CFString, on element: AXUIElement) -> Int? {
-        var value: CFTypeRef?
-        guard AXUIElementCopyAttributeValue(element, attribute, &value) == .success else {
-            return nil
-        }
-
-        if let number = value as? NSNumber {
-            return number.intValue
-        }
-
-        return nil
-    }
-
-    private func boolValue(for attribute: CFString, on element: AXUIElement) -> Bool? {
-        var value: CFTypeRef?
-        guard AXUIElementCopyAttributeValue(element, attribute, &value) == .success else {
-            return nil
-        }
-
-        if let number = value as? NSNumber {
-            return number.boolValue
-        }
-
-        return nil
     }
 
     private func axChildren(of element: AXUIElement) -> [AXUIElement] {
