@@ -4,7 +4,7 @@
         <title>whispermax</title>
         <item>
             <title>0.1.1</title>
-            <pubDate>Sun, 19 Apr 2026 02:07:40 +0530</pubDate>
+            <pubDate>Sun, 19 Apr 2026 02:40:07 +0530</pubDate>
             <link>https://github.com/rittikbasu/whispermax</link>
             <sparkle:fullReleaseNotesLink>https://github.com/rittikbasu/whispermax/releases/tag/v0.1.1</sparkle:fullReleaseNotesLink>
             <sparkle:version>2</sparkle:version>
@@ -13,18 +13,12 @@
             <sparkle:hardwareRequirements>arm64</sparkle:hardwareRequirements>
             <description sparkle:format="markdown"><![CDATA[## whispermax v0.1.1
 
-i wanted a fast local dictation app i could trust, so i built whispermax.
-
 - in-app update support with a small home update pill
 - smarter insertion across more native apps, browsers, and editors
 - more honest pasted vs copied feedback
 - better clipboard behavior for fallback insertion
 - safer recorder failure cleanup
 - continued polish across onboarding, settings, and dictionary flows
-
-notes:
-- automatic update checks are now on by default every 6 hours
-- the app is still not notarized, so macos may ask you to open it manually the first time
 ]]></description>
             <enclosure url="https://github.com/rittikbasu/whispermax/releases/download/v0.1.1/whispermax-v0.1.1-macos.zip" length="4785594" type="application/octet-stream" sparkle:edSignature="72v7185eTNCuJhEg78v7cxn+o1ahmupI3Tr3pfAg5rftZwP+SAb00CBZBNHRzSWuz+SOWjPL7R/x58W9fA0UDA=="/>
         </item>
