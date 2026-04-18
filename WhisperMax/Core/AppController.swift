@@ -673,6 +673,7 @@ final class AppController {
                 statusText = "Listening…"
                 phase = .recording
             } catch {
+                handleRecordingStartFailure()
                 setError("Failed to start recording.")
             }
 
@@ -1124,6 +1125,11 @@ final class AppController {
 
     private func setError(_ message: String) {
         setRecorderIssue(.generic(message))
+    }
+
+    private func handleRecordingStartFailure() {
+        restoreSystemInputAfterRecordingIfNeeded()
+        pendingInsertionTarget = nil
     }
 
     private func setRecorderIssue(_ issue: RecorderIssue) {
