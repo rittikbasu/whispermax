@@ -168,12 +168,8 @@ final class AudioRecorderService {
         do {
             try recordingFile.write(from: buffer)
         } catch {
-            let message = "Recording failed."
-            let onError = self.onError
             stateLock.unlock()
-            Task { @MainActor in
-                onError?(message)
-            }
+            failRecording(message: "Recording failed.")
             return
         }
 
@@ -197,6 +193,46 @@ final class AudioRecorderService {
         let onMeter = self.onMeter
         Task { @MainActor in
             onMeter?(emittedLevel, duration)
+        }
+    }
+
+    private func failRecording(message: String) {
+        let engine: AVAudioEngine?
+        let recordingURL: URL?
+        let onError = self.onError
+
+        stateLock.lock()
+        guard isRecording else {
+            stateLock.unlock()
+            Task { @MainActor in
+                onError?(message)
+            }
+            return
+        }
+
+        engine = self.engine
+        recordingURL = self.recordingURL
+        self.engine = nil
+        self.recordingFile = nil
+        self.recordingURL = nil
+        self.shouldDiscardCurrentRecording = false
+        self.isRecording = false
+        self.recordedDuration = 0
+        self.lastMeterEmissionTime = 0
+        self.ambientFloorDB = -52
+        self.displayedLevel = 0
+        self.recentRMSDB.removeAll(keepingCapacity: true)
+        stateLock.unlock()
+
+        engine?.inputNode.removeTap(onBus: 0)
+        engine?.stop()
+
+        if let recordingURL {
+            try? FileManager.default.removeItem(at: recordingURL)
+        }
+
+        Task { @MainActor in
+            onError?(message)
         }
     }
 

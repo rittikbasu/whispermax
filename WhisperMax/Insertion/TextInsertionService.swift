@@ -293,6 +293,7 @@ final class TextInsertionService {
 
         pasteboard.clearContents()
         pasteboard.setString(text, forType: .string)
+        let temporaryChangeCount = pasteboard.changeCount
 
         guard targetPrepared else {
             restorePasteboard(snapshot, to: pasteboard)
@@ -313,6 +314,10 @@ final class TextInsertionService {
         )
 
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) {
+            guard pasteboard.changeCount == temporaryChangeCount else {
+                return
+            }
+
             self.restorePasteboard(snapshot, to: pasteboard)
         }
 
