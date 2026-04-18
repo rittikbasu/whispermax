@@ -335,8 +335,7 @@ final class AppController {
     var menuFeedbackMessage: String?
     var pendingTranscriptDeletion: PendingTranscriptDeletion?
     var canCheckForUpdates = false
-    var automaticallyChecksForUpdates = false
-    var updateCheckCadence: UpdateCheckCadence = .everyTwelveHours
+    var availableUpdate: AvailableAppUpdate?
 
     init(updateController: AppUpdateController = AppUpdateController()) {
         self.updateController = updateController
@@ -436,8 +435,32 @@ final class AppController {
         return "\(shortVersion) (\(buildVersion))"
     }
 
-    var updateStatusDescription: String {
-        automaticallyChecksForUpdates ? "Checks every \(updateCheckCadence.label)" : "Manual only"
+    var updatePrimaryDescription: String {
+        if let availableUpdate {
+            return "Update \(availableUpdate.version) available"
+        }
+
+        return "Current version \(appVersionDisplay)"
+    }
+
+    var updateSecondaryDescription: String {
+        if availableUpdate != nil {
+            return "Current version \(appVersionDisplay) · checks automatically"
+        }
+
+        return "Checks for updates automatically"
+    }
+
+    var updateActionTitle: String {
+        guard let availableUpdate else {
+            return "Check for Updates…"
+        }
+
+        return availableUpdate.isSimulated ? "View Update" : "Install Update…"
+    }
+
+    var shouldShowHomeUpdatePill: Bool {
+        sidebarSelection == .home && availableUpdate != nil
     }
 
     var menuPrimaryActionTitle: String {
@@ -601,12 +624,22 @@ final class AppController {
         updateController.checkForUpdates()
     }
 
-    func setAutomaticallyChecksForUpdates(_ enabled: Bool) {
-        updateController.setAutomaticallyChecksForUpdates(enabled)
+    func openAvailableUpdate() {
+        guard let availableUpdate else {
+            updateController.checkForUpdates()
+            return
+        }
+
+        if availableUpdate.isSimulated, let releaseNotesURL = availableUpdate.releaseNotesURL {
+            NSWorkspace.shared.open(releaseNotesURL)
+        } else {
+            updateController.checkForUpdates()
+        }
     }
 
-    func setUpdateCheckCadence(_ cadence: UpdateCheckCadence) {
-        updateController.setCadence(cadence)
+    func refreshUpdateState() {
+        updateController.refreshState()
+        syncUpdateState()
     }
 
     func toggleRecording() async {
@@ -854,8 +887,7 @@ final class AppController {
 
     private func syncUpdateState() {
         canCheckForUpdates = updateController.canCheckForUpdates
-        automaticallyChecksForUpdates = updateController.automaticallyChecksForUpdates
-        updateCheckCadence = updateController.selectedCadence
+        availableUpdate = updateController.availableUpdate
     }
 
     private func schedulePendingDeletionDismissal() {

@@ -9,6 +9,9 @@ private enum Theme {
     static let dictionaryAccent = Color(red: 0.49, green: 0.68, blue: 0.98)
     static let dictionaryAccentFill = Color(red: 0.16, green: 0.21, blue: 0.31)
     static let dictionaryAccentStroke = Color(red: 0.36, green: 0.50, blue: 0.80).opacity(0.48)
+    static let updateAccent = Color(red: 0.88, green: 0.73, blue: 0.29)
+    static let updateFill = Color(red: 0.17, green: 0.14, blue: 0.08).opacity(0.42)
+    static let updateStroke = Color(red: 0.89, green: 0.73, blue: 0.29).opacity(0.22)
     static let sidebarDivider = Color.white.opacity(0.06)
     static let contentTop = Color(red: 0.051, green: 0.054, blue: 0.070)
     static let contentBottom = Color(red: 0.034, green: 0.036, blue: 0.048)
@@ -211,15 +214,27 @@ private struct WindowHeader: View {
     @Environment(AppController.self) private var controller
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Text(headerTitle)
-                .font(.system(size: 41, weight: .medium))
-                .tracking(-1.3)
-                .foregroundStyle(.white)
+        HStack(alignment: .top, spacing: 18) {
+            VStack(alignment: .leading, spacing: 10) {
+                Text(headerTitle)
+                    .font(.system(size: 41, weight: .medium))
+                    .tracking(-1.3)
+                    .foregroundStyle(.white)
 
-            Text(headerSubtitle)
-                .font(.system(size: 16, weight: .regular))
-                .foregroundStyle(.white.opacity(0.42))
+                Text(headerSubtitle)
+                    .font(.system(size: 16, weight: .regular))
+                    .foregroundStyle(.white.opacity(0.42))
+            }
+
+            Spacer(minLength: 16)
+
+            if controller.shouldShowHomeUpdatePill, let availableUpdate = controller.availableUpdate {
+                UpdateAvailablePill(
+                    version: availableUpdate.version,
+                    action: controller.openAvailableUpdate
+                )
+                .padding(.top, 2)
+            }
         }
     }
 
@@ -248,6 +263,49 @@ private struct WindowHeader: View {
         case .settings:
             return "Tune the local workflow, input path, and system permissions."
         }
+    }
+}
+
+private struct UpdateAvailablePill: View {
+    let version: String
+    let action: () -> Void
+    @State private var isHovering = false
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 9) {
+                Circle()
+                    .fill(Theme.updateAccent)
+                    .frame(width: 7, height: 7)
+
+                Text("update available")
+                    .font(.system(size: 12.5, weight: .medium))
+                    .foregroundStyle(.white.opacity(0.9))
+
+                Text(version)
+                    .font(.system(size: 11.5, weight: .medium, design: .monospaced))
+                    .monospacedDigit()
+                    .foregroundStyle(.white.opacity(0.44))
+            }
+            .padding(.horizontal, 13)
+            .frame(height: 34)
+            .background(
+                Capsule(style: .continuous)
+                    .fill(isHovering ? Theme.updateFill.opacity(1.12) : Theme.updateFill)
+                    .overlay(
+                        Capsule(style: .continuous)
+                            .stroke(isHovering ? Theme.updateStroke.opacity(1.25) : Theme.updateStroke, lineWidth: 1)
+                    )
+            )
+            .scaleEffect(isHovering ? 1.01 : 1)
+        }
+        .buttonStyle(.plain)
+        .contentShape(Capsule(style: .continuous))
+        .onHover { hovering in
+            isHovering = hovering
+        }
+        .animation(.easeOut(duration: 0.14), value: isHovering)
+        .help("Open update details")
     }
 }
 
@@ -1190,68 +1248,38 @@ private struct SettingsSection: View {
                     .frame(height: 1)
 
                 VStack(alignment: .leading, spacing: 14) {
+                    Text("UPDATES")
+                        .font(.system(size: 10, weight: .semibold))
+                        .tracking(1.6)
+                        .foregroundStyle(.white.opacity(0.34))
+
                     HStack(alignment: .firstTextBaseline) {
                         VStack(alignment: .leading, spacing: 4) {
-                            Text("UPDATES")
-                                .font(.system(size: 10, weight: .semibold))
-                                .tracking(1.6)
-                                .foregroundStyle(.white.opacity(0.34))
-                            Text(controller.appVersionDisplay)
-                                .font(.system(size: 13, weight: .regular))
-                                .foregroundStyle(.white.opacity(0.88))
+                            Text(controller.updatePrimaryDescription)
+                                .font(.system(size: 13, weight: .medium))
+                                .foregroundStyle(.white.opacity(0.86))
+                            Text(controller.updateSecondaryDescription)
+                                .font(.system(size: 12, weight: .regular))
+                                .foregroundStyle(.white.opacity(0.42))
                         }
 
                         Spacer()
 
-                        Button("Check for Updates…", action: controller.checkForUpdates)
-                            .buttonStyle(PanelButtonStyle(prominent: true))
-                            .disabled(!controller.canCheckForUpdates)
-                    }
-
-                    VStack(alignment: .leading, spacing: 10) {
-                        Toggle(isOn: Binding(
-                            get: { controller.automaticallyChecksForUpdates },
-                            set: { controller.setAutomaticallyChecksForUpdates($0) }
-                        )) {
-                            VStack(alignment: .leading, spacing: 3) {
-                                Text("Automatically check for updates")
-                                    .font(.system(size: 13, weight: .medium))
-                                    .foregroundStyle(.white.opacity(0.84))
-                                Text(controller.updateStatusDescription)
-                                    .font(.system(size: 12, weight: .regular))
-                                    .foregroundStyle(.white.opacity(0.42))
+                        Button(controller.updateActionTitle) {
+                            if controller.availableUpdate != nil {
+                                controller.openAvailableUpdate()
+                            } else {
+                                controller.checkForUpdates()
                             }
                         }
-                        .toggleStyle(SwitchToggleStyle(tint: Theme.dictionaryAccent))
-
-                        if controller.automaticallyChecksForUpdates {
-                            UpdateCadenceControl(
-                                selectedCadence: controller.updateCheckCadence,
-                                onSelect: controller.setUpdateCheckCadence
-                            )
-                        }
+                        .buttonStyle(PanelButtonStyle(prominent: controller.availableUpdate != nil))
+                        .disabled(controller.availableUpdate == nil && !controller.canCheckForUpdates)
                     }
                 }
             }
             .padding(.horizontal, 22)
             .padding(.vertical, 20)
             .background(PanelCardBackground(cornerRadius: 16))
-        }
-    }
-}
-
-private struct UpdateCadenceControl: View {
-    let selectedCadence: UpdateCheckCadence
-    let onSelect: (UpdateCheckCadence) -> Void
-
-    var body: some View {
-        HStack(spacing: 8) {
-            ForEach(UpdateCheckCadence.allCases) { cadence in
-                Button(cadence.label) {
-                    onSelect(cadence)
-                }
-                .buttonStyle(UpdateCadenceButtonStyle(isSelected: selectedCadence == cadence))
-            }
         }
     }
 }
@@ -1342,37 +1370,6 @@ private struct PanelButtonStyle: ButtonStyle {
                     .overlay(
                         RoundedRectangle(cornerRadius: 10, style: .continuous)
                             .stroke(Color.white.opacity(0.08), lineWidth: 1)
-                    )
-            )
-            .scaleEffect(configuration.isPressed ? 0.985 : 1)
-            .animation(.easeOut(duration: 0.14), value: configuration.isPressed)
-    }
-}
-
-private struct UpdateCadenceButtonStyle: ButtonStyle {
-    let isSelected: Bool
-
-    func makeBody(configuration: Configuration) -> some View {
-        configuration.label
-            .font(.system(size: 11.5, weight: .medium))
-            .foregroundStyle(.white.opacity(isSelected ? 0.94 : 0.62))
-            .padding(.horizontal, 12)
-            .frame(height: 30)
-            .background(
-                Capsule(style: .continuous)
-                    .fill(
-                        isSelected
-                            ? Theme.dictionaryAccentFill.opacity(configuration.isPressed ? 0.88 : 1)
-                            : Color.white.opacity(configuration.isPressed ? 0.08 : 0.04)
-                    )
-                    .overlay(
-                        Capsule(style: .continuous)
-                            .stroke(
-                                isSelected
-                                    ? Theme.dictionaryAccentStroke
-                                    : Color.white.opacity(0.08),
-                                lineWidth: 1
-                            )
                     )
             )
             .scaleEffect(configuration.isPressed ? 0.985 : 1)

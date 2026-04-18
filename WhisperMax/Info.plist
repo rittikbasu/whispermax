@@ -31,12 +31,12 @@
 	<key>SUAllowsAutomaticUpdates</key>
 	<false/>
 	<key>SUEnableAutomaticChecks</key>
-	<false/>
+	<true/>
 	<key>SUFeedURL</key>
 	<string>https://raw.githubusercontent.com/rittikbasu/whispermax/master/docs/appcast.xml</string>
 	<key>SUPublicEDKey</key>
 	<string>N1I1sIymz/8YSMemTJ3wKHt/FDjl3UW0SFt7trC/QaE=</string>
 	<key>SUScheduledCheckInterval</key>
-	<integer>43200</integer>
+	<integer>21600</integer>
 </dict>
 </plist>

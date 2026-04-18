@@ -38,6 +38,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationDidBecomeActive(_ notification: Notification) {
         controller.refreshPermissions()
+        controller.refreshUpdateState()
     }
 
     func applicationWillTerminate(_ notification: Notification) {
