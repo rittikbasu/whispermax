@@ -8,8 +8,8 @@ settings:
   base:
     PRODUCT_NAME: whispermax
     PRODUCT_BUNDLE_IDENTIFIER: com.whispermax.app
-    MARKETING_VERSION: 0.1.0
-    CURRENT_PROJECT_VERSION: 1
+    MARKETING_VERSION: 0.1.1
+    CURRENT_PROJECT_VERSION: 2
     VERSIONING_SYSTEM: apple-generic
     CODE_SIGN_ENTITLEMENTS: WhisperMax/WhisperMax.entitlements
     SWIFT_VERSION: 6.0

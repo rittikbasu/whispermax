@@ -3,32 +3,30 @@
     <channel>
         <title>whispermax</title>
         <item>
-            <title>0.1.0</title>
-            <pubDate>Sat, 18 Apr 2026 04:50:36 +0530</pubDate>
+            <title>0.1.1</title>
+            <pubDate>Sun, 19 Apr 2026 02:07:40 +0530</pubDate>
             <link>https://github.com/rittikbasu/whispermax</link>
-            <sparkle:fullReleaseNotesLink>https://github.com/rittikbasu/whispermax/releases/tag/v0.1.0</sparkle:fullReleaseNotesLink>
-            <sparkle:version>1</sparkle:version>
-            <sparkle:shortVersionString>0.1.0</sparkle:shortVersionString>
+            <sparkle:fullReleaseNotesLink>https://github.com/rittikbasu/whispermax/releases/tag/v0.1.1</sparkle:fullReleaseNotesLink>
+            <sparkle:version>2</sparkle:version>
+            <sparkle:shortVersionString>0.1.1</sparkle:shortVersionString>
             <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
             <sparkle:hardwareRequirements>arm64</sparkle:hardwareRequirements>
-            <description sparkle:format="markdown"><![CDATA[## whispermax v0.1.0
+            <description sparkle:format="markdown"><![CDATA[## whispermax v0.1.1
 
 i wanted a fast local dictation app i could trust, so i built whispermax.
 
-- fully local dictation with whisper large v3 turbo
-- compact floating recorder ui
-- fast global hotkey workflow
-- direct insertion across many native apps and browser text boxes
-- honest fallback to copied to clipboard when insertion can’t be trusted
-- searchable transcript history
-- dictionary for custom names, products, and phrases
-- simple onboarding for model, permissions, and hotkey setup
+- in-app update support with a small home update pill
+- smarter insertion across more native apps, browsers, and editors
+- more honest pasted vs copied feedback
+- better clipboard behavior for fallback insertion
+- safer recorder failure cleanup
+- continued polish across onboarding, settings, and dictionary flows
 
 notes:
-- this release is local-first and built around one model
-- the app is currently not notarized, so macos may ask you to open it manually the first time
+- automatic update checks are now on by default every 6 hours
+- the app is still not notarized, so macos may ask you to open it manually the first time
 ]]></description>
-            <enclosure url="https://github.com/rittikbasu/whispermax/releases/download/v0.1.0/whispermax-v0.1.0-macos.zip" length="4785548" type="application/octet-stream" sparkle:edSignature="DOIn2cHR1vM5+dQD7AaXYn/7eTA71C0WvO07rMvjl6brogTVXVQEAuNn3aWwgSaspaWU6wfDnwpxaf7sCR4KDw=="/>
+            <enclosure url="https://github.com/rittikbasu/whispermax/releases/download/v0.1.1/whispermax-v0.1.1-macos.zip" length="4785594" type="application/octet-stream" sparkle:edSignature="72v7185eTNCuJhEg78v7cxn+o1ahmupI3Tr3pfAg5rftZwP+SAb00CBZBNHRzSWuz+SOWjPL7R/x58W9fA0UDA=="/>
         </item>
     </channel>
 </rss>
