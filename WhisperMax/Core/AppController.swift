@@ -125,6 +125,7 @@ final class AppController {
     private var menuFeedbackResetTask: Task<Void, Never>?
     private var pendingDeleteResetTask: Task<Void, Never>?
     private var pendingInsertionTarget: InsertionTargetContext?
+    private var invalidModelPathsForSession: Set<String> = []
 
     var phase: RecordingPhase = .loadingModel {
         didSet {
@@ -210,16 +211,19 @@ final class AppController {
         }
 
         // Already at our own path
-        if FileManager.default.fileExists(atPath: ModelLocator.appLocalModelURL.path) {
+        if canUseModel(at: ModelLocator.appLocalModelURL) {
             markModelSetupReady(.ownPath)
             return
         }
 
         // Found in SuperWhisper — hardlink to our path (instant, zero extra disk space)
-        if FileManager.default.fileExists(atPath: ModelLocator.superwhisperModelURL.path) {
+        if canUseModel(at: ModelLocator.superwhisperModelURL) {
             do {
                 try FileManager.default.createDirectory(
                     at: ModelLocator.modelsDirectory, withIntermediateDirectories: true)
+                if FileManager.default.fileExists(atPath: ModelLocator.appLocalModelURL.path) {
+                    try FileManager.default.removeItem(at: ModelLocator.appLocalModelURL)
+                }
                 try FileManager.default.linkItem(
                     at: ModelLocator.superwhisperModelURL, to: ModelLocator.appLocalModelURL)
                 markModelSetupReady(.superwhisper)
@@ -1013,7 +1017,7 @@ final class AppController {
     }
 
     private func preloadModel() async {
-        guard let modelURL = ModelLocator.preferredModelURL() else {
+        guard let modelURL = preferredSessionModelURL else {
             enterModelRepairMode()
             startModelSetup()
             return
@@ -1027,6 +1031,7 @@ final class AppController {
             phase = .ready
             statusText = idleStatusText
         } catch {
+            handleModelPreparationFailure(for: modelURL)
             setError("Failed to load the local Whisper model.")
         }
     }
@@ -1193,7 +1198,7 @@ final class AppController {
     }
 
     private var hasUsableModelAvailable: Bool {
-        ModelLocator.preferredModelURL() != nil
+        preferredSessionModelURL != nil
     }
 
     private func beginModelDownload() {
@@ -1203,6 +1208,7 @@ final class AppController {
     private func markModelSetupReady(_ source: ModelSource) {
         modelDownloader = nil
         try? FileManager.default.removeItem(at: ModelLocator.downloadResumeDataURL)
+        invalidModelPathsForSession.remove(ModelLocator.appLocalModelURL.path)
         modelSetupState = .ready(source)
     }
 
@@ -1212,8 +1218,41 @@ final class AppController {
         onboardingStep = .download
         modelSetupState = .idle
         whisperEngine = nil
+        modelPath = ""
         phase = .loadingModel
         statusText = "Speech model needs to be set up again."
+    }
+
+    private var preferredSessionModelURL: URL? {
+        if canUseModel(at: ModelLocator.appLocalModelURL) {
+            return ModelLocator.appLocalModelURL
+        }
+
+        if canUseModel(at: ModelLocator.superwhisperModelURL) {
+            return ModelLocator.superwhisperModelURL
+        }
+
+        return nil
+    }
+
+    private func canUseModel(at url: URL) -> Bool {
+        guard !invalidModelPathsForSession.contains(url.path) else {
+            return false
+        }
+
+        return FileManager.default.fileExists(atPath: url.path)
+    }
+
+    private func handleModelPreparationFailure(for modelURL: URL) {
+        invalidModelPathsForSession.insert(modelURL.path)
+
+        if modelURL == ModelLocator.appLocalModelURL {
+            try? FileManager.default.removeItem(at: modelURL)
+        }
+
+        whisperEngine = nil
+        enterModelRepairMode()
+        startModelSetup()
     }
 
     private var transcriptToCopy: String? {
