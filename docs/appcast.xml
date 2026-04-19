@@ -3,24 +3,23 @@
     <channel>
         <title>whispermax</title>
         <item>
-            <title>0.1.1</title>
-            <pubDate>Sun, 19 Apr 2026 02:40:07 +0530</pubDate>
+            <title>0.1.2</title>
+            <pubDate>Mon, 20 Apr 2026 04:16:25 +0530</pubDate>
             <link>https://github.com/rittikbasu/whispermax</link>
-            <sparkle:fullReleaseNotesLink>https://github.com/rittikbasu/whispermax/releases/tag/v0.1.1</sparkle:fullReleaseNotesLink>
-            <sparkle:version>2</sparkle:version>
-            <sparkle:shortVersionString>0.1.1</sparkle:shortVersionString>
+            <sparkle:fullReleaseNotesLink>https://github.com/rittikbasu/whispermax/releases/tag/v0.1.2</sparkle:fullReleaseNotesLink>
+            <sparkle:version>3</sparkle:version>
+            <sparkle:shortVersionString>0.1.2</sparkle:shortVersionString>
             <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
             <sparkle:hardwareRequirements>arm64</sparkle:hardwareRequirements>
-            <description sparkle:format="markdown"><![CDATA[## whispermax v0.1.1
+            <description sparkle:format="markdown"><![CDATA[## whispermax v0.1.2
 
-- in-app update support with a small home update pill
-- smarter insertion across more native apps, browsers, and editors
-- more honest pasted vs copied feedback
-- better clipboard behavior for fallback insertion
-- safer recorder failure cleanup
-- continued polish across onboarding, settings, and dictionary flows
+- redesigned recorder ui with a cleaner live waveform and better transcribing motion
+- redesigned settings and dictionary screens with calmer, denser layouts
+- smoother transcript delete undo flow with cmd-z support
+- more reliable pinned microphone behavior across reconnects and reboots
+- safer recovery when recorder startup or model preload fails
 ]]></description>
-            <enclosure url="https://github.com/rittikbasu/whispermax/releases/download/v0.1.1/whispermax-v0.1.1-macos.zip" length="4785594" type="application/octet-stream" sparkle:edSignature="72v7185eTNCuJhEg78v7cxn+o1ahmupI3Tr3pfAg5rftZwP+SAb00CBZBNHRzSWuz+SOWjPL7R/x58W9fA0UDA=="/>
+            <enclosure url="https://github.com/rittikbasu/whispermax/releases/download/v0.1.2/whispermax-v0.1.2-macos.zip" length="4909574" type="application/octet-stream" sparkle:edSignature="FHzSSTOosdauPCafNrLndfR6I1+QPI32XL9woaA/f7gbH9FeG8X4C/8TCGwVvkFlBkhv6+HX1tob4AMUdir6CQ=="/>
         </item>
     </channel>
 </rss>
