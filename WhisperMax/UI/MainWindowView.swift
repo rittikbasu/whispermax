@@ -874,12 +874,9 @@ private struct DictionarySection: View {
     }
 
     private var trimmedQuery: String {
-        queryText.replacingOccurrences(
-            of: "\\s+",
-            with: " ",
-            options: .regularExpression
-        )
-        .trimmingCharacters(in: .whitespacesAndNewlines)
+        queryText
+            .split(whereSeparator: \.isWhitespace)
+            .joined(separator: " ")
     }
 
     private var canAddQuery: Bool {
@@ -890,7 +887,31 @@ private struct DictionarySection: View {
         controller.containsWordDictionaryEntry(queryText)
     }
 
+    private var isDictionaryEmpty: Bool {
+        controller.wordDictionary.isEmpty
+    }
+
     var body: some View {
+        Group {
+            if isDictionaryEmpty {
+                DictionaryEmptyHero(
+                    queryText: $queryText,
+                    canAddQuery: canAddQuery,
+                    addCurrentQuery: addCurrentQuery,
+                    addTerm: addTerm
+                )
+                .background(dictionaryCardBackground)
+                .transition(.opacity)
+            } else {
+                filledList
+                    .transition(.opacity)
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .animation(.easeInOut(duration: 0.22), value: isDictionaryEmpty)
+    }
+
+    private var filledList: some View {
         VStack(alignment: .leading, spacing: Layout.historySpacing) {
             SectionHeader(
                 title: "DICTIONARY",
@@ -908,10 +929,9 @@ private struct DictionarySection: View {
                 DictionaryInputDivider()
 
                 if entries.isEmpty {
-                    DictionaryEmptyState(
-                        queryText: trimmedQuery,
-                        canAddQuery: canAddQuery,
-                        addAction: addTerm
+                    DictionaryNoMatchesView(
+                        query: trimmedQuery,
+                        canAddQuery: canAddQuery
                     )
                 } else {
                     ScrollView(showsIndicators: true) {
@@ -926,25 +946,39 @@ private struct DictionarySection: View {
                         }
                         .padding(.vertical, 8)
                     }
+                    .frame(height: listHeight)
                 }
             }
-            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-            .background(
-                RoundedRectangle(cornerRadius: 18, style: .continuous)
-                    .fill(
-                        LinearGradient(
-                            colors: [Theme.historyBoxTop, Theme.historyBoxBottom],
-                            startPoint: .top,
-                            endPoint: .bottom
-                        )
-                    )
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 18, style: .continuous)
-                            .stroke(Theme.historyBoxBorder, lineWidth: 1)
-                    )
-            )
+            .frame(maxWidth: .infinity, alignment: .topLeading)
+            .background(dictionaryCardBackground)
+
+            Spacer(minLength: 0)
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+    }
+
+    private var listHeight: CGFloat {
+        let dividerHeight: CGFloat = 0.5
+        let verticalPadding: CGFloat = 16
+        let count = CGFloat(entries.count)
+        let content = count * DictionaryRow.estimatedHeight
+            + max(0, count - 1) * dividerHeight
+            + verticalPadding
+        return min(content, 460)
+    }
+
+    private var dictionaryCardBackground: some View {
+        RoundedRectangle(cornerRadius: 18, style: .continuous)
+            .fill(
+                LinearGradient(
+                    colors: [Theme.historyBoxTop, Theme.historyBoxBottom],
+                    startPoint: .top,
+                    endPoint: .bottom
+                )
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 18, style: .continuous)
+                    .stroke(Theme.historyBoxBorder, lineWidth: 1)
+            )
     }
 
     private var addButtonTitle: String {
@@ -1021,18 +1055,28 @@ private struct DictionaryInputDivider: View {
 }
 
 private struct DictionaryRow: View {
+    static let estimatedHeight: CGFloat = 54
+
     @Environment(AppController.self) private var controller
 
     let entry: WordDictionaryEntry
 
+    @State private var isHovered = false
+
     var body: some View {
-        HStack(alignment: .center, spacing: 18) {
+        HStack(alignment: .center, spacing: 14) {
             Text(entry.text)
-                .font(.system(size: 18, weight: .medium))
-                .tracking(-0.2)
-                .foregroundStyle(.white.opacity(0.9))
+                .font(.system(size: 16, weight: .medium))
+                .tracking(-0.15)
+                .foregroundStyle(.white.opacity(0.88))
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .fixedSize(horizontal: false, vertical: true)
+
+            Text(addedLabel)
+                .font(.system(size: 10.5, weight: .medium, design: .monospaced))
+                .tracking(1.4)
+                .monospacedDigit()
+                .foregroundStyle(.white.opacity(isHovered ? 0.36 : 0.22))
 
             HistoryActionButton(
                 normalSymbol: "trash",
@@ -1041,65 +1085,141 @@ private struct DictionaryRow: View {
                 activeTint: Color(red: 0.93, green: 0.38, blue: 0.34),
                 action: { controller.deleteWordDictionaryEntry(entry) }
             )
+            .opacity(isHovered ? 1 : 0.28)
             .help("Remove from dictionary")
         }
         .padding(.horizontal, 22)
-        .padding(.vertical, 21)
+        .padding(.vertical, 16)
+        .contentShape(Rectangle())
+        .background(Color.white.opacity(isHovered ? 0.020 : 0))
+        .onHover { hovering in
+            withAnimation(.easeOut(duration: 0.14)) {
+                isHovered = hovering
+            }
+        }
+    }
+
+    private var addedLabel: String {
+        let calendar = Calendar.current
+        let month = calendar.shortMonthSymbols[calendar.component(.month, from: entry.createdAt) - 1].uppercased()
+        let day = calendar.component(.day, from: entry.createdAt)
+        return "\(month) \(day)"
     }
 }
 
-private struct DictionaryEmptyState: View {
-    let queryText: String
+private struct DictionaryEmptyHero: View {
+    @Binding var queryText: String
     let canAddQuery: Bool
-    let addAction: (String) -> Void
+    let addCurrentQuery: () -> Void
+    let addTerm: (String) -> Void
+
+    @FocusState private var inputFocused: Bool
+
+    private var hasInput: Bool {
+        queryText.contains { !$0.isWhitespace }
+    }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 18) {
-            VStack(alignment: .leading, spacing: 10) {
-                Text(title)
-                    .font(.system(size: 29, weight: .medium))
-                    .tracking(-0.9)
-                    .foregroundStyle(.white.opacity(0.9))
+        VStack(spacing: 28) {
+            VStack(spacing: 12) {
+                Text("Start with the words whispermax misses")
+                    .font(.system(size: 27, weight: .medium))
+                    .tracking(-0.8)
+                    .foregroundStyle(.white.opacity(0.90))
+                    .multilineTextAlignment(.center)
 
-                Text(bodyText)
-                    .font(.system(size: 14, weight: .regular))
-                    .foregroundStyle(.white.opacity(0.40))
+                Text("whispermax will use them as spelling hints during local transcription.")
+                    .font(.system(size: 13.5, weight: .regular))
+                    .foregroundStyle(.white.opacity(0.42))
+                    .multilineTextAlignment(.center)
+                    .lineSpacing(2)
                     .fixedSize(horizontal: false, vertical: true)
-                    .frame(maxWidth: 560, alignment: .leading)
+                    .frame(maxWidth: 560)
             }
 
-            if queryText.isEmpty {
-                VStack(alignment: .leading, spacing: 12) {
-                    Text("TRY THESE FIRST")
-                        .font(.system(size: 10.5, weight: .semibold))
-                        .tracking(1.8)
-                        .foregroundStyle(.white.opacity(0.28))
+            heroInput
 
-                    HStack(spacing: 10) {
-                        DictionaryExampleChip(text: "Codex", addAction: addAction)
-                        DictionaryExampleChip(text: "Claude Code", addAction: addAction)
-                        DictionaryExampleChip(text: "SQLite", addAction: addAction)
-                    }
-                }
+            suggestions
+                .opacity(hasInput ? 0.32 : 1)
+                .animation(.easeInOut(duration: 0.20), value: hasInput)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .padding(.horizontal, 48)
+        .padding(.vertical, 56)
+        .onAppear { inputFocused = true }
+    }
+
+    private var heroInput: some View {
+        HStack(spacing: 12) {
+            Image(systemName: "book.closed")
+                .font(.system(size: 14, weight: .medium))
+                .foregroundStyle(.white.opacity(0.44))
+
+            TextField(
+                "",
+                text: $queryText,
+                prompt: Text("Add your first word or phrase…")
+                    .foregroundStyle(.white.opacity(0.26))
+            )
+            .textFieldStyle(.plain)
+            .font(.system(size: 16, weight: .regular))
+            .foregroundStyle(.white.opacity(0.92))
+            .focused($inputFocused)
+            .onSubmit(addCurrentQuery)
+
+            Button("Add", action: addCurrentQuery)
+                .buttonStyle(DictionaryAddButtonStyle(isEnabled: canAddQuery))
+                .disabled(!canAddQuery)
+        }
+        .padding(.horizontal, 16)
+        .frame(height: 54)
+        .frame(maxWidth: 440)
+        .background(
+            RoundedRectangle(cornerRadius: 13, style: .continuous)
+                .fill(Color.white.opacity(0.035))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 13, style: .continuous)
+                        .stroke(Color.white.opacity(inputFocused ? 0.10 : 0.065), lineWidth: 1)
+                )
+                .animation(.easeOut(duration: 0.14), value: inputFocused)
+        )
+    }
+
+    private var suggestions: some View {
+        VStack(spacing: 11) {
+            Text("OR TRY ONE OF THESE")
+                .font(.system(size: 10, weight: .semibold))
+                .tracking(1.8)
+                .foregroundStyle(.white.opacity(0.26))
+
+            HStack(spacing: 10) {
+                DictionaryExampleChip(text: "Codex", addAction: addTerm)
+                DictionaryExampleChip(text: "Claude Code", addAction: addTerm)
+                DictionaryExampleChip(text: "SQLite", addAction: addTerm)
             }
         }
-        .frame(maxWidth: .infinity, minHeight: 280, alignment: .topLeading)
+    }
+}
+
+private struct DictionaryNoMatchesView: View {
+    let query: String
+    let canAddQuery: Bool
+
+    var body: some View {
+        VStack(spacing: 8) {
+            Text("No matches for \u{201C}\(query)\u{201D}")
+                .font(.system(size: 14, weight: .medium))
+                .foregroundStyle(.white.opacity(0.62))
+                .lineLimit(1)
+                .truncationMode(.middle)
+
+            Text(canAddQuery ? "Press Return to add it." : "Try a different search term.")
+                .font(.system(size: 12.5, weight: .regular))
+                .foregroundStyle(.white.opacity(0.36))
+        }
+        .frame(maxWidth: .infinity)
         .padding(.horizontal, 22)
-        .padding(.vertical, 30)
-    }
-
-    private var title: String {
-        queryText.isEmpty ? "Start with the words whispermax misses" : "No matching entries"
-    }
-
-    private var bodyText: String {
-        if queryText.isEmpty {
-            return "Add product names, people, commands, and uncommon phrases. whispermax will use them as spelling hints during local transcription."
-        }
-
-        return canAddQuery
-            ? "Press Add above to save this term to your dictionary."
-            : "Try a different search term."
+        .padding(.vertical, 46)
     }
 }
 
