@@ -483,8 +483,7 @@ private struct HistorySection: View {
                 .overlay(alignment: .bottomTrailing) {
                     if let pendingTranscriptDeletion = controller.pendingTranscriptDeletion {
                         DeleteUndoToast(
-                            token: pendingTranscriptDeletion.token,
-                            title: pendingTranscriptDeletion.title,
+                            deletion: pendingTranscriptDeletion,
                             undoAction: controller.undoPendingDeletion
                         )
                         .padding(.trailing, 18)
@@ -1289,19 +1288,40 @@ private struct DictionaryAddButtonStyle: ButtonStyle {
 }
 
 private struct DeleteUndoToast: View {
-    let token: UUID
-    let title: String
+    let deletion: PendingTranscriptDeletion
     let undoAction: () -> Void
 
     @State private var progress: CGFloat = 1
 
-    private let progressAnimationDuration: Double = 4.0
+    private static let snippetMaxLength = 40
+    private static let accent = Color(red: 0.63, green: 0.76, blue: 0.98)
+    private static let progressAnimationDuration: Double = 4.25
+
+    private var displayText: String {
+        if deletion.count > 1 {
+            return "\(deletion.count) transcripts deleted"
+        }
+
+        guard let entry = deletion.entries.first else {
+            return "Transcript deleted"
+        }
+
+        let raw = entry.text.trimmingCharacters(in: .whitespacesAndNewlines)
+        if raw.count <= Self.snippetMaxLength {
+            return "Deleted \u{201C}\(raw)\u{201D}"
+        }
+
+        let snippet = String(raw.prefix(Self.snippetMaxLength))
+            .trimmingCharacters(in: .whitespaces)
+        return "Deleted \u{201C}\(snippet)…\u{201D}"
+    }
 
     var body: some View {
         HStack(spacing: 10) {
-            Text(title)
+            Text(displayText)
                 .font(.system(size: 12, weight: .medium))
                 .foregroundStyle(.white.opacity(0.82))
+                .lineLimit(1)
 
             Rectangle()
                 .fill(Color.white.opacity(0.08))
@@ -1310,9 +1330,10 @@ private struct DeleteUndoToast: View {
             Button(action: undoAction) {
                 Text("Undo")
                     .font(.system(size: 12, weight: .semibold))
-                    .foregroundStyle(Color(red: 0.63, green: 0.76, blue: 0.98))
+                    .foregroundStyle(Self.accent)
             }
             .buttonStyle(.plain)
+            .keyboardShortcut("z", modifiers: .command)
         }
         .padding(.horizontal, 14)
         .frame(height: 34)
@@ -1334,40 +1355,35 @@ private struct DeleteUndoToast: View {
                         .stroke(Color.white.opacity(0.08), lineWidth: 1)
                 )
         )
-        .overlay {
-            GeometryReader { proxy in
-                RoundedRectangle(cornerRadius: 14, style: .continuous)
-                    .fill(
-                        LinearGradient(
-                            colors: [
-                                Color(red: 0.33, green: 0.41, blue: 0.56).opacity(0.17),
-                                Color.white.opacity(0.075),
-                                Color.white.opacity(0.03),
-                                .clear,
-                            ],
-                            startPoint: .leading,
-                            endPoint: .trailing
-                        )
-                    )
-                    .frame(width: proxy.size.width * max(progress, 0))
-                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
-                    .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
-                    .allowsHitTesting(false)
-            }
+        .overlay(alignment: .bottomLeading) {
+            progressRail
         }
         .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
         .shadow(color: Color.black.opacity(0.16), radius: 12, y: 8)
-        .onAppear {
-            progress = 1
-            withAnimation(.linear(duration: progressAnimationDuration)) {
-                progress = 0
-            }
+        .onAppear(perform: restartProgress)
+        .onChange(of: deletion.token, restartProgress)
+    }
+
+    private var progressRail: some View {
+        GeometryReader { proxy in
+            Rectangle()
+                .fill(
+                    LinearGradient(
+                        colors: [Self.accent.opacity(0.55), Self.accent],
+                        startPoint: .leading,
+                        endPoint: .trailing
+                    )
+                )
+                .frame(width: proxy.size.width * max(progress, 0))
         }
-        .onChange(of: token) {
-            progress = 1
-            withAnimation(.linear(duration: progressAnimationDuration)) {
-                progress = 0
-            }
+        .frame(height: 2)
+        .allowsHitTesting(false)
+    }
+
+    private func restartProgress() {
+        progress = 1
+        withAnimation(.linear(duration: Self.progressAnimationDuration)) {
+            progress = 0
         }
     }
 }
