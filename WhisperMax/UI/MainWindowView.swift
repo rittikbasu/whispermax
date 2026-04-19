@@ -28,6 +28,7 @@ private enum Theme {
 private enum Layout {
     static let contentSidePadding: CGFloat = 46
     static let maxContentWidth: CGFloat = 1320
+    static let settingsContentWidth: CGFloat = 760
     static let headerTopPadding: CGFloat = 66
     static let headerBottomPadding: CGFloat = 46
     static let contentBottomPadding: CGFloat = 28
@@ -173,38 +174,75 @@ private struct MainContentArea: View {
                 endPoint: .bottomTrailing
             )
 
-            VStack(alignment: .leading, spacing: 0) {
-                VStack(alignment: .leading, spacing: controller.needsSetup ? 26 : 0) {
-                    WindowHeader()
-
-                    if controller.needsSetup {
-                        PermissionSetupPanel()
-                    }
-                }
-                .padding(.top, Layout.headerTopPadding)
-                .padding(.bottom, Layout.headerBottomPadding)
-
+            Group {
                 switch controller.sidebarSelection {
                 case .home:
-                    HistorySection()
-                        .frame(maxHeight: .infinity)
-                case .dictionary:
-                    DictionarySection()
-                        .frame(maxHeight: .infinity)
-                case .settings:
-                    ScrollView(showsIndicators: false) {
-                        SettingsSection()
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .padding(.bottom, 24)
+                    pinnedHeaderLayout {
+                        HistorySection()
+                            .frame(maxHeight: .infinity)
                     }
+                case .dictionary:
+                    pinnedHeaderLayout {
+                        DictionarySection()
+                            .frame(maxHeight: .infinity)
+                    }
+                case .settings:
+                    settingsScrollLayout
                 }
             }
-            .frame(maxWidth: Layout.maxContentWidth, maxHeight: .infinity, alignment: .topLeading)
-            .padding(.horizontal, Layout.contentSidePadding)
-            .padding(.bottom, Layout.contentBottomPadding)
-            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         }
         .animation(.easeOut(duration: 0.18), value: controller.sidebarSelection)
+    }
+
+    @ViewBuilder
+    private func pinnedHeaderLayout<Content: View>(
+        @ViewBuilder content: () -> Content
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 0) {
+            VStack(alignment: .leading, spacing: controller.needsSetup ? 26 : 0) {
+                WindowHeader()
+
+                if controller.needsSetup {
+                    PermissionSetupPanel()
+                }
+            }
+            .padding(.top, Layout.headerTopPadding)
+            .padding(.bottom, Layout.headerBottomPadding)
+
+            content()
+        }
+        .frame(maxWidth: Layout.maxContentWidth, maxHeight: .infinity, alignment: .topLeading)
+        .padding(.horizontal, Layout.contentSidePadding)
+        .padding(.bottom, Layout.contentBottomPadding)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+    }
+
+    private var settingsScrollLayout: some View {
+        ScrollView(showsIndicators: false) {
+            VStack(alignment: .leading, spacing: 0) {
+                WindowHeader()
+                    .padding(.top, Layout.headerTopPadding)
+                    .padding(.bottom, Layout.headerBottomPadding)
+
+                SettingsSection()
+                    .padding(.bottom, 40)
+            }
+            .frame(maxWidth: Layout.settingsContentWidth, alignment: .topLeading)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.horizontal, Layout.contentSidePadding)
+        }
+        .mask(
+            LinearGradient(
+                stops: [
+                    .init(color: .clear, location: 0),
+                    .init(color: .black, location: 0.035),
+                    .init(color: .black, location: 0.965),
+                    .init(color: .clear, location: 1),
+                ],
+                startPoint: .top,
+                endPoint: .bottom
+            )
+        )
     }
 }
 
@@ -261,7 +299,7 @@ private struct WindowHeader: View {
         case .dictionary:
             return "Add the product names, phrases, and uncommon terms you want whispermax to hear correctly."
         case .settings:
-            return "Tune the local workflow, input path, and system permissions."
+            return "Your hotkey, model, and permissions."
         }
     }
 }
@@ -1210,93 +1248,6 @@ private struct DeleteUndoToast: View {
             withAnimation(.linear(duration: progressAnimationDuration)) {
                 progress = 0
             }
-        }
-    }
-}
-
-// MARK: - Settings
-
-private struct SettingsSection: View {
-    @Environment(AppController.self) private var controller
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            SectionHeader(title: "SETTINGS")
-
-            VStack(alignment: .leading, spacing: 18) {
-                VStack(alignment: .leading, spacing: 16) {
-                    SettingRow(label: "Hotkey", value: controller.hotkeyDisplay)
-                    SettingRow(label: "Model", value: controller.modelDisplayName)
-                    SettingRow(label: "Model Path", value: controller.modelPath)
-                    SettingRow(label: "Input Preference", value: controller.preferredInputDisplayName)
-                    SettingRow(label: "Active Input", value: controller.activeInputDisplayName)
-                    SettingRow(label: "Accessibility", value: controller.accessibilityGranted ? "Granted" : "Not Granted")
-                    SettingRow(label: "Microphone", value: controller.microphoneGranted ? "Granted" : "Not Granted")
-
-                    HStack(spacing: 10) {
-                        Button("Prompt Accessibility Again", action: controller.promptForAccessibility)
-                            .buttonStyle(PanelButtonStyle(prominent: false))
-                        Button("Open Microphone Settings", action: controller.openMicrophoneSettings)
-                            .buttonStyle(PanelButtonStyle(prominent: false))
-                        Button("Refresh Permissions", action: controller.refreshPermissions)
-                            .buttonStyle(PanelButtonStyle(prominent: false))
-                    }
-                }
-
-                Rectangle()
-                    .fill(Color.white.opacity(0.05))
-                    .frame(height: 1)
-
-                VStack(alignment: .leading, spacing: 14) {
-                    Text("UPDATES")
-                        .font(.system(size: 10, weight: .semibold))
-                        .tracking(1.6)
-                        .foregroundStyle(.white.opacity(0.34))
-
-                    HStack(alignment: .firstTextBaseline) {
-                        VStack(alignment: .leading, spacing: 4) {
-                            Text(controller.updatePrimaryDescription)
-                                .font(.system(size: 13, weight: .medium))
-                                .foregroundStyle(.white.opacity(0.86))
-                            Text(controller.updateSecondaryDescription)
-                                .font(.system(size: 12, weight: .regular))
-                                .foregroundStyle(.white.opacity(0.42))
-                        }
-
-                        Spacer()
-
-                        Button(controller.updateActionTitle) {
-                            if controller.availableUpdate != nil {
-                                controller.openAvailableUpdate()
-                            } else {
-                                controller.checkForUpdates()
-                            }
-                        }
-                        .buttonStyle(PanelButtonStyle(prominent: controller.availableUpdate != nil))
-                        .disabled(controller.availableUpdate == nil && !controller.canCheckForUpdates)
-                    }
-                }
-            }
-            .padding(.horizontal, 22)
-            .padding(.vertical, 20)
-            .background(PanelCardBackground(cornerRadius: 16))
-        }
-    }
-}
-
-private struct SettingRow: View {
-    let label: String
-    let value: String
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            Text(label.uppercased())
-                .font(.system(size: 10, weight: .semibold))
-                .tracking(1.6)
-                .foregroundStyle(.white.opacity(0.34))
-            Text(value)
-                .font(.system(size: 13, weight: .regular))
-                .foregroundStyle(.white.opacity(0.88))
         }
     }
 }

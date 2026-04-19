@@ -26,13 +26,6 @@ private enum OnboardingTheme {
     static let contentAppear = Animation.easeOut(duration: 0.35)
 
     static let buttonWidth: CGFloat = 300
-
-    // Keycap surface — shared so both keys read as the same material
-    static let keySurface = Color(red: 0.12, green: 0.12, blue: 0.14)
-    static let keyHighlight = Color.white.opacity(0.055)
-    static let keyHighlightPressed = Color.white.opacity(0.025)
-    static let keyBorder = Color.white.opacity(0.09)
-    static let keyBorderPressed = Color.white.opacity(0.04)
 }
 
 // MARK: - Styled App Name
@@ -613,89 +606,6 @@ private struct ReadyCard: View {
                 try? await Task.sleep(for: .seconds(2.2))
             }
         }
-    }
-}
-
-// MARK: - Keycaps
-
-private struct KeycapGroup: View {
-    let isPressed: Bool
-
-    var body: some View {
-        HStack(spacing: 5) {
-            Keycap(label: "\u{2325}", sublabel: "option", width: 50, isPressed: isPressed)
-            Keycap(label: nil, sublabel: nil, width: 170, isPressed: isPressed)
-        }
-    }
-}
-
-private struct Keycap: View {
-    let label: String?
-    var sublabel: String?
-    let width: CGFloat
-    let isPressed: Bool
-
-    private let height: CGFloat = 42
-    private let radius: CGFloat = 6
-    private let totalHeight: CGFloat = 46 // fixed frame prevents layout shift
-
-    var body: some View {
-        ZStack(alignment: .top) {
-            keyFace
-                .offset(y: isPressed ? 1.5 : 0)
-        }
-        .frame(width: width, height: totalHeight)
-        .shadow(
-            color: .black.opacity(isPressed ? 0.08 : 0.30),
-            radius: isPressed ? 0.5 : 2.5,
-            y: isPressed ? 0.5 : 2
-        )
-        .animation(.easeOut(duration: 0.10), value: isPressed)
-    }
-
-    private var keyFace: some View {
-        ZStack {
-            if let label {
-                VStack(spacing: 1) {
-                    Text(label)
-                        .font(.system(size: 16, weight: .regular))
-                        .foregroundStyle(.white.opacity(isPressed ? 0.50 : 0.72))
-
-                    if let sublabel {
-                        Text(sublabel)
-                            .font(.system(size: 8, weight: .medium))
-                            .tracking(0.4)
-                            .foregroundStyle(.white.opacity(isPressed ? 0.12 : 0.22))
-                    }
-                }
-            }
-        }
-        .frame(width: width, height: height)
-        .background(
-            RoundedRectangle(cornerRadius: radius, style: .continuous)
-                .fill(OnboardingTheme.keySurface)
-                .overlay(
-                    // Surface sheen — uniform across all key widths
-                    RoundedRectangle(cornerRadius: radius, style: .continuous)
-                        .fill(
-                            LinearGradient(
-                                stops: [
-                                    .init(color: isPressed ? OnboardingTheme.keyHighlightPressed : OnboardingTheme.keyHighlight, location: 0),
-                                    .init(color: .clear, location: 0.5),
-                                ],
-                                startPoint: .top,
-                                endPoint: .bottom
-                            )
-                        )
-                )
-                .overlay(
-                    RoundedRectangle(cornerRadius: radius, style: .continuous)
-                        .stroke(
-                            isPressed ? OnboardingTheme.keyBorderPressed : OnboardingTheme.keyBorder,
-                            lineWidth: 0.5
-                        )
-                )
-        )
     }
 }
 
