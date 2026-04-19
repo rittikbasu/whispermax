@@ -4,7 +4,7 @@ import Foundation
 import Observation
 
 private enum WaveformHistory {
-    static let sampleCount = 84
+    static let sampleCount = 40
     static let activeFloor: CGFloat = 0.0012
     static let idleFloor: CGFloat = 0.0008
 }
@@ -22,6 +22,16 @@ enum RecordingPhase: Equatable {
     case transcribing
     case inserted(InsertionMethod)
     case error(RecorderIssue)
+
+    var isInsertedPhase: Bool {
+        if case .inserted = self { return true }
+        return false
+    }
+
+    var isErrorPhase: Bool {
+        if case .error = self { return true }
+        return false
+    }
 }
 
 enum RecorderIssue: Equatable {
@@ -126,9 +136,15 @@ final class AppController {
     private var pendingDeleteResetTask: Task<Void, Never>?
     private var pendingInsertionTarget: InsertionTargetContext?
     private var invalidModelPathsForSession: Set<String> = []
+    private(set) var transcribingAnimationStartTime: TimeInterval?
 
     var phase: RecordingPhase = .loadingModel {
         didSet {
+            if phase == .transcribing, oldValue != .transcribing {
+                transcribingAnimationStartTime = Date.timeIntervalSinceReferenceDate
+            } else if phase != .transcribing {
+                transcribingAnimationStartTime = nil
+            }
             phaseDidChange?(phase)
         }
     }

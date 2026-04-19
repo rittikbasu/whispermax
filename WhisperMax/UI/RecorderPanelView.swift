@@ -21,10 +21,10 @@ struct RecorderPanelView: View {
         GeometryReader { proxy in
             let outerHorizontalPadding: CGFloat = 8
             let outerVerticalPadding: CGFloat = 8
-            let cornerRadius = min(max(proxy.size.height * 0.14, 20), 24)
+            let cornerRadius = min(max(proxy.size.height * 0.18, 18), 22)
             let contentHeight = proxy.size.height - (outerVerticalPadding * 2)
-            let railHeight: CGFloat = 60
-            let waveHeight = max(92, contentHeight - railHeight - 1)
+            let railHeight: CGFloat = 44
+            let waveHeight = max(48, contentHeight - railHeight - 1)
 
             ZStack {
                 RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
@@ -52,7 +52,14 @@ struct RecorderPanelView: View {
                     )
 
                 VStack(spacing: 0) {
-                    RecorderWaveStage(levels: controller.waveformLevels)
+                    RecorderWaveStage(
+                        levels: controller.waveformLevels,
+                        isRecording: controller.phase == .recording,
+                        isTranscribing: controller.phase == .transcribing,
+                        isInserted: controller.phase.isInsertedPhase,
+                        isError: controller.phase.isErrorPhase,
+                        transcribingStartTime: controller.transcribingAnimationStartTime
+                    )
                         .frame(height: waveHeight)
 
                     Rectangle()
@@ -79,6 +86,11 @@ struct RecorderPanelView: View {
 
 private struct RecorderWaveStage: View {
     let levels: [CGFloat]
+    let isRecording: Bool
+    let isTranscribing: Bool
+    let isInserted: Bool
+    let isError: Bool
+    let transcribingStartTime: TimeInterval?
 
     var body: some View {
         ZStack {
@@ -96,10 +108,16 @@ private struct RecorderWaveStage: View {
             )
             .blendMode(.screen)
 
-            WaveformBarsView(levels: levels)
-                .padding(.horizontal, 18)
-                .padding(.top, 12)
-                .padding(.bottom, 10)
+            WaveformBarsView(
+                levels: levels,
+                isRecording: isRecording,
+                isTranscribing: isTranscribing,
+                isInserted: isInserted,
+                isError: isError,
+                transcribingStartTime: transcribingStartTime
+            )
+                .padding(.horizontal, 16)
+                .padding(.vertical, 6)
         }
     }
 }
@@ -122,7 +140,7 @@ private struct RecorderControlRail: View {
             )
 
             HStack(spacing: 12) {
-                RecorderStatusDot(color: statusDotColor, isRecording: phase == .recording)
+                RecorderStatusDot(color: statusDotColor, pulseStyle: pulseStyle)
 
                 leadContent
 
@@ -140,14 +158,10 @@ private struct RecorderControlRail: View {
     private var leadContent: some View {
         switch phase {
         case .recording, .ready:
-            HStack(spacing: 10) {
-                Text(duration)
-                    .monospacedDigit()
-                    .font(.system(size: 16, weight: .semibold))
-                    .foregroundStyle(.white.opacity(0.96))
-
-                RecorderKeyBadge(text: hotkeyText)
-            }
+            Text(duration)
+                .monospacedDigit()
+                .font(.system(size: 16, weight: .semibold))
+                .foregroundStyle(.white.opacity(0.96))
         case .transcribing:
             RecorderStateLabel(title: "Transcribing")
         case .inserted(let method):
@@ -163,7 +177,7 @@ private struct RecorderControlRail: View {
     private var trailingContent: some View {
         switch phase {
         case .recording:
-            RecorderActionStrip(stop: stop, cancel: cancel)
+            RecorderActionStrip(hotkeyText: hotkeyText, stop: stop, cancel: cancel)
         case .error(.microphonePermissionRequired):
             RecorderRecoveryStrip(title: "Grant Access", action: openMicrophoneSettings)
         default:
@@ -174,10 +188,18 @@ private struct RecorderControlRail: View {
     private var statusDotColor: Color {
         switch phase {
         case .recording: RecorderTheme.statusRecording
-        case .transcribing: Color(red: 0.91, green: 0.73, blue: 0.28)
+        case .transcribing: Color(red: 0.42, green: 0.76, blue: 0.95)
         case .inserted: RecorderTheme.statusInserted
         case .error: Color(red: 0.93, green: 0.38, blue: 0.34)
         default: Color.white.opacity(0.24)
+        }
+    }
+
+    private var pulseStyle: RecorderStatusDot.PulseStyle? {
+        switch phase {
+        case .recording: .recording
+        case .transcribing: .transcribing
+        default: nil
         }
     }
 
@@ -194,34 +216,67 @@ private struct RecorderControlRail: View {
 }
 
 private struct RecorderStatusDot: View {
-    let color: Color
-    let isRecording: Bool
+    enum PulseStyle {
+        case recording
+        case transcribing
 
-    @State private var pulsing = false
+        var period: Double {
+            switch self {
+            case .recording: 1.3
+            case .transcribing: 1.9
+            }
+        }
+
+        var scaleAmplitude: CGFloat {
+            switch self {
+            case .recording: 0.11
+            case .transcribing: 0.07
+            }
+        }
+
+        var shadowRadius: (low: CGFloat, high: CGFloat) {
+            switch self {
+            case .recording: (4, 14)
+            case .transcribing: (3, 9)
+            }
+        }
+
+        var shadowOpacity: (low: Double, high: Double) {
+            switch self {
+            case .recording: (0.32, 0.82)
+            case .transcribing: (0.26, 0.58)
+            }
+        }
+    }
+
+    let color: Color
+    let pulseStyle: PulseStyle?
 
     var body: some View {
-        Circle()
-            .fill(color)
-            .frame(width: 8, height: 8)
-            .shadow(color: color.opacity(pulsing ? 0.78 : 0.38), radius: pulsing ? 10 : 4)
-            .scaleEffect(pulsing ? 1.26 : 1.0)
-            .onAppear {
-                guard isRecording else { return }
-                withAnimation(.easeInOut(duration: 0.85).repeatForever(autoreverses: true)) {
-                    pulsing = true
-                }
+        if let pulseStyle {
+            TimelineView(.animation(minimumInterval: 1.0 / 60, paused: false)) { timeline in
+                let t = timeline.date.timeIntervalSinceReferenceDate
+                let phase = (sin(t * (2 * .pi / pulseStyle.period)) + 1) / 2
+                let scale = 1.0 + pulseStyle.scaleAmplitude * CGFloat(phase)
+                let shadowRadius = lerp(pulseStyle.shadowRadius.low, pulseStyle.shadowRadius.high, CGFloat(phase))
+                let shadowOpacity = lerp(pulseStyle.shadowOpacity.low, pulseStyle.shadowOpacity.high, phase)
+
+                Circle()
+                    .fill(color)
+                    .frame(width: 8, height: 8)
+                    .shadow(color: color.opacity(shadowOpacity), radius: shadowRadius)
+                    .scaleEffect(scale)
             }
-            .onChange(of: isRecording) { _, recording in
-                if recording {
-                    withAnimation(.easeInOut(duration: 0.85).repeatForever(autoreverses: true)) {
-                        pulsing = true
-                    }
-                } else {
-                    withAnimation(.easeInOut(duration: 0.2)) {
-                        pulsing = false
-                    }
-                }
-            }
+        } else {
+            Circle()
+                .fill(color)
+                .frame(width: 8, height: 8)
+                .shadow(color: color.opacity(0.30), radius: 4)
+        }
+    }
+
+    private func lerp<T: BinaryFloatingPoint>(_ a: T, _ b: T, _ t: T) -> T {
+        a + (b - a) * t
     }
 }
 
@@ -250,22 +305,30 @@ private struct RecorderStateLabel: View {
 }
 
 private struct RecorderActionStrip: View {
+    let hotkeyText: String
     let stop: () -> Void
     let cancel: () -> Void
 
     var body: some View {
-        HStack(spacing: 16) {
-            Button("Stop", action: stop)
-                .buttonStyle(RecorderRailButtonStyle(weight: .semibold, color: .white.opacity(0.88)))
+        HStack(spacing: 14) {
+            HStack(spacing: 8) {
+                Button("Stop", action: stop)
+                    .buttonStyle(RecorderRailButtonStyle(weight: .semibold, color: .white.opacity(0.88)))
+
+                RecorderKeyBadge(text: hotkeyText)
+            }
 
             Rectangle()
                 .fill(Color.white.opacity(0.11))
                 .frame(width: 1, height: 20)
 
-            Button("Cancel", action: cancel)
-                .buttonStyle(RecorderRailButtonStyle(weight: .medium, color: .white.opacity(0.50)))
-
-            RecorderKeyBadge(text: "Esc")
+            Button(action: cancel) {
+                HStack(spacing: 8) {
+                    Text("Cancel")
+                    RecorderKeyBadge(text: "Esc")
+                }
+            }
+            .buttonStyle(RecorderRailButtonStyle(weight: .medium, color: .white.opacity(0.50)))
         }
         .frame(height: 38)
     }

@@ -5,9 +5,9 @@ import SwiftUI
 @MainActor
 final class RecorderPanelController {
     private let panel: NSPanel
-    private let panelHeight: CGFloat = 176
-    private let minPanelWidth: CGFloat = 500
-    private let maxPanelWidth: CGFloat = 680
+    private let panelHeight: CGFloat = 112
+    private let minPanelWidth: CGFloat = 440
+    private let maxPanelWidth: CGFloat = 520
 
     init(controller: AppController) {
         let rootView = RecorderPanelView()
