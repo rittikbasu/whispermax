@@ -3,6 +3,7 @@ import Foundation
 
 struct AudioInputDevice: Identifiable, Hashable {
     let audioObjectID: AudioObjectID
+    let uid: String
     let name: String
 
     var id: AudioObjectID { audioObjectID }
@@ -18,6 +19,7 @@ enum AudioInputDeviceServiceError: LocalizedError {
     case unableToReadDevices
     case unableToReadDefaultInput
     case unableToReadDeviceName
+    case unableToReadDeviceUID
     case unableToSwitchDefaultInput
 
     var errorDescription: String? {
@@ -30,6 +32,8 @@ enum AudioInputDeviceServiceError: LocalizedError {
             return "Could not read the default input device."
         case .unableToReadDeviceName:
             return "Could not read the selected input device name."
+        case .unableToReadDeviceUID:
+            return "Could not read the selected input device identifier."
         case .unableToSwitchDefaultInput:
             return "Could not switch the default input device."
         }
@@ -51,11 +55,15 @@ final class AudioInputDeviceService {
                 return nil
             }
 
+            guard let uid = try? deviceUID(for: deviceID) else {
+                return nil
+            }
+
             guard let name = try? deviceName(for: deviceID) else {
                 return nil
             }
 
-            return AudioInputDevice(audioObjectID: deviceID, name: name)
+            return AudioInputDevice(audioObjectID: deviceID, uid: uid, name: name)
         }
 
         guard !devices.isEmpty else {
@@ -260,6 +268,30 @@ final class AudioInputDeviceService {
         }
 
         return name as String
+    }
+
+    private func deviceUID(for deviceID: AudioObjectID) throws -> String {
+        var propertyAddress = makePropertyAddress(selector: kAudioDevicePropertyDeviceUID)
+
+        var uid: CFString?
+        var dataSize = UInt32(MemoryLayout<CFString?>.size)
+
+        let status = withUnsafeMutablePointer(to: &uid) { pointer in
+            AudioObjectGetPropertyData(
+                deviceID,
+                &propertyAddress,
+                0,
+                nil,
+                &dataSize,
+                pointer
+            )
+        }
+
+        guard status == noErr, let uid else {
+            throw AudioInputDeviceServiceError.unableToReadDeviceUID
+        }
+
+        return uid as String
     }
 
     private func hasInputChannels(deviceID: AudioObjectID) -> Bool {

@@ -405,8 +405,7 @@ final class AppController {
             return nil
         }
 
-        let isAvailable = inputDevices.contains { $0.audioObjectID == preferredPinnedInput.resolvedAudioObjectID }
-        return isAvailable ? nil : preferredPinnedInput
+        return preferredPinnedInput.resolvedDevice(in: inputDevices) == nil ? preferredPinnedInput : nil
     }
 
     var activeInputDisplayName: String {
@@ -578,6 +577,7 @@ final class AppController {
             let snapshot = try inputDeviceService.snapshot()
             inputDevices = snapshot.devices
             defaultInputDeviceID = snapshot.defaultDeviceID
+            migratePinnedInputPreferenceIfNeeded()
         } catch {
             inputDevices = []
             defaultInputDeviceID = kAudioObjectUnknown
@@ -595,7 +595,7 @@ final class AppController {
     }
 
     func pinInputDevice(_ device: AudioInputDevice) {
-        let pinnedPreference = PinnedAudioInputPreference(audioObjectID: device.audioObjectID, name: device.name)
+        let pinnedPreference = PinnedAudioInputPreference(device: device)
 
         guard inputPreference != .pinned(pinnedPreference) else {
             return
@@ -611,7 +611,7 @@ final class AppController {
             return false
         }
 
-        return device.audioObjectID == preferredPinnedInput.resolvedAudioObjectID
+        return preferredPinnedInput.matches(device)
     }
 
     func openAccessibilitySettings() {
@@ -959,11 +959,12 @@ final class AppController {
             return
         }
 
-        let pinnedDeviceID = preferredPinnedInput.resolvedAudioObjectID
-        guard inputDevices.contains(where: { $0.audioObjectID == pinnedDeviceID }) else {
+        guard let pinnedDevice = preferredPinnedInput.resolvedDevice(in: inputDevices) else {
             setMenuFeedback("\(preferredPinnedInput.name) unavailable. Using System Default")
             return
         }
+
+        let pinnedDeviceID = pinnedDevice.audioObjectID
 
         recordingPinnedDeviceID = pinnedDeviceID
 
@@ -1253,6 +1254,19 @@ final class AppController {
         whisperEngine = nil
         enterModelRepairMode()
         startModelSetup()
+    }
+
+    private func migratePinnedInputPreferenceIfNeeded() {
+        guard case .pinned(let pinnedPreference) = inputPreference,
+              pinnedPreference.needsUIDMigration,
+              let resolvedDevice = pinnedPreference.resolvedDevice(in: inputDevices)
+        else {
+            return
+        }
+
+        let migratedPreference = PinnedAudioInputPreference(device: resolvedDevice)
+        inputPreference = .pinned(migratedPreference)
+        inputPreferenceStore.save(inputPreference)
     }
 
     private var transcriptToCopy: String? {
