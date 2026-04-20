@@ -41,4 +41,8 @@ enum ModelLocator {
 
         return nil
     }
+
+    static func bundledVADModelURL(in bundle: Bundle = .main) -> URL? {
+        bundle.url(forResource: "ggml-silero-v6.2.0", withExtension: "bin")
+    }
 }

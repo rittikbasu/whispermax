@@ -1,6 +1,14 @@
-import AVFoundation
 import Foundation
 import whisper
+
+struct TranscriptionResult {
+    let text: String
+    let averageNoSpeechProbability: Float
+    let maxNoSpeechProbability: Float
+    let segmentCount: Int
+    let averageTokenProbability: Float
+    let evaluatedTokenCount: Int
+}
 
 actor WhisperEngine {
     enum EngineError: LocalizedError {
@@ -40,13 +48,21 @@ actor WhisperEngine {
     }
 
     func transcribe(audioURL: URL, prompt: String? = nil) throws -> String {
+        let samples = try AudioSampleDecoder.decodeWhisperSamples(from: audioURL)
+        return try transcribe(samples: samples, prompt: prompt)
+    }
+
+    func transcribe(samples: [Float], prompt: String? = nil) throws -> String {
+        try transcribeResult(samples: samples, prompt: prompt).text
+    }
+
+    func transcribeResult(samples: [Float], prompt: String? = nil) throws -> TranscriptionResult {
         try prepare()
 
         guard let context else {
             throw EngineError.initializationFailed
         }
 
-        let samples = try decodeAudioFile(audioURL)
         let maxThreads = max(1, min(8, ProcessInfo.processInfo.processorCount - 2))
         let transcriptionPrompt = prompt?
             .trimmingCharacters(in: .whitespacesAndNewlines)
@@ -83,95 +99,46 @@ actor WhisperEngine {
 
         let segmentCount = whisper_full_n_segments(context)
         var transcript = ""
+        var noSpeechProbabilities: [Float] = []
+        var tokenProbabilitySum: Float = 0
+        var evaluatedTokenCount = 0
 
         for index in 0..<segmentCount {
             transcript += String(cString: whisper_full_get_segment_text(context, index))
-        }
-
-        return transcript
-    }
-}
-
-private func decodeAudioFile(_ url: URL) throws -> [Float] {
-    let audioFile = try AVAudioFile(forReading: url)
-    let sourceFormat = audioFile.processingFormat
-    let sourceFrameCount = AVAudioFrameCount(audioFile.length)
-
-    guard
-        sourceFrameCount > 0,
-        let sourceBuffer = AVAudioPCMBuffer(pcmFormat: sourceFormat, frameCapacity: sourceFrameCount)
-    else {
-        return []
-    }
-
-    try audioFile.read(into: sourceBuffer)
-
-    guard
-        let targetFormat = AVAudioFormat(
-            commonFormat: .pcmFormatFloat32,
-            sampleRate: 16_000,
-            channels: 1,
-            interleaved: false
-        )
-    else {
-        return []
-    }
-
-    if
-        sourceFormat.sampleRate == targetFormat.sampleRate,
-        sourceFormat.channelCount == targetFormat.channelCount,
-        sourceFormat.commonFormat == targetFormat.commonFormat,
-        sourceFormat.isInterleaved == targetFormat.isInterleaved,
-        let channelData = sourceBuffer.floatChannelData
-    {
-        return Array(
-            UnsafeBufferPointer(
-                start: channelData[0],
-                count: Int(sourceBuffer.frameLength)
+            noSpeechProbabilities.append(
+                whisper_full_get_segment_no_speech_prob(context, index)
             )
-        )
-    }
 
-    guard let converter = AVAudioConverter(from: sourceFormat, to: targetFormat) else {
-        return []
-    }
+            let tokenCount = whisper_full_n_tokens(context, index)
+            guard tokenCount > 0 else {
+                continue
+            }
 
-    let outputFrameCapacity = AVAudioFrameCount(
-        ceil(Double(sourceBuffer.frameLength) * targetFormat.sampleRate / sourceFormat.sampleRate)
-    ) + 4_096
+            for tokenIndex in 0..<tokenCount {
+                let tokenText = String(cString: whisper_full_get_token_text(context, index, tokenIndex))
+                guard !tokenText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+                    continue
+                }
 
-    guard let outputBuffer = AVAudioPCMBuffer(
-        pcmFormat: targetFormat,
-        frameCapacity: outputFrameCapacity
-    ) else {
-        return []
-    }
-
-    var hasProvidedInput = false
-    var conversionError: NSError?
-    converter.convert(to: outputBuffer, error: &conversionError) { _, outStatus in
-        if hasProvidedInput {
-            outStatus.pointee = .endOfStream
-            return nil
+                tokenProbabilitySum += whisper_full_get_token_p(context, index, tokenIndex)
+                evaluatedTokenCount += 1
+            }
         }
 
-        hasProvidedInput = true
-        outStatus.pointee = .haveData
-        return sourceBuffer
-    }
+        let averageNoSpeechProbability = noSpeechProbabilities.isEmpty
+            ? 0
+            : noSpeechProbabilities.reduce(0, +) / Float(noSpeechProbabilities.count)
+        let averageTokenProbability = evaluatedTokenCount == 0
+            ? 0
+            : tokenProbabilitySum / Float(evaluatedTokenCount)
 
-    if conversionError != nil {
-        return []
-    }
-
-    guard let channelData = outputBuffer.floatChannelData else {
-        return []
-    }
-
-    return Array(
-        UnsafeBufferPointer(
-            start: channelData[0],
-            count: Int(outputBuffer.frameLength)
+        return TranscriptionResult(
+            text: transcript,
+            averageNoSpeechProbability: averageNoSpeechProbability,
+            maxNoSpeechProbability: noSpeechProbabilities.max() ?? 0,
+            segmentCount: Int(segmentCount),
+            averageTokenProbability: averageTokenProbability,
+            evaluatedTokenCount: evaluatedTokenCount
         )
-    )
+    }
 }

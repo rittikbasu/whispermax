@@ -36,12 +36,15 @@ enum RecordingPhase: Equatable {
 
 enum RecorderIssue: Equatable {
     case microphonePermissionRequired
+    case noSpeechDetected
     case generic(String)
 
     var statusMessage: String {
         switch self {
         case .microphonePermissionRequired:
             return "Microphone access is required for local dictation."
+        case .noSpeechDetected:
+            return "No speech detected."
         case .generic(let message):
             return message
         }
@@ -51,6 +54,8 @@ enum RecorderIssue: Equatable {
         switch self {
         case .microphonePermissionRequired:
             return "Microphone access needed"
+        case .noSpeechDetected:
+            return "No speech detected"
         case .generic:
             return "Try again"
         }
@@ -60,6 +65,8 @@ enum RecorderIssue: Equatable {
         switch self {
         case .microphonePermissionRequired:
             return nil
+        case .noSpeechDetected:
+            return "Try speaking a little louder or closer to the mic"
         case .generic:
             return "Recorder reset"
         }
@@ -69,6 +76,8 @@ enum RecorderIssue: Equatable {
         switch self {
         case .microphonePermissionRequired:
             return 4.2
+        case .noSpeechDetected:
+            return 2.2
         case .generic:
             return 1.8
         }
@@ -125,6 +134,7 @@ final class AppController {
     let permissionsManager = PermissionsManager()
     private let insertionService = TextInsertionService()
     private let recorder = AudioRecorderService()
+    private let speechActivityService = SpeechActivityService()
 
     private var whisperEngine: WhisperEngine?
     private var preRecordingSystemDefaultInputDeviceID: AudioObjectID?
@@ -1076,17 +1086,39 @@ final class AppController {
         }
 
         do {
-            let rawText = try await whisperEngine.transcribe(
-                audioURL: url,
+            let preparedAudio = try speechActivityService.prepareTranscriptionAudio(from: url)
+            let samples: [Float]
+            let speechAnalysis: SpeechActivityAnalysis
+
+            switch preparedAudio {
+            case .noSpeech:
+                setNoSpeechDetected()
+                return
+            case .ready(let preparedSamples, let analysis):
+                samples = preparedSamples
+                speechAnalysis = analysis
+            }
+
+            let transcription = try await whisperEngine.transcribeResult(
+                samples: samples,
                 prompt: preferredTranscriptionPrompt
             )
             let cleaned = TranscriptFormatter.normalize(
-                rawText,
+                transcription.text,
                 preferredTerms: preferredTranscriptionTerms
             )
 
+            if shouldRejectBorderlineTranscription(
+                transcription,
+                cleaned: cleaned,
+                analysis: speechAnalysis
+            ) {
+                setNoSpeechDetected()
+                return
+            }
+
             guard !cleaned.isEmpty else {
-                setError("No speech was detected.")
+                setNoSpeechDetected()
                 return
             }
 
@@ -1109,7 +1141,7 @@ final class AppController {
             case .accessibility:
                 statusText = "Inserted directly."
             case .clipboard:
-                statusText = "Pasted and restored clipboard."
+                statusText = "Pasted into your app."
             case .copied:
                 statusText = "Copied to clipboard."
             }
@@ -1147,6 +1179,45 @@ final class AppController {
 
     private func setError(_ message: String) {
         setRecorderIssue(.generic(message))
+    }
+
+    private func setNoSpeechDetected() {
+        setRecorderIssue(.noSpeechDetected)
+    }
+
+    private func shouldRejectBorderlineTranscription(
+        _ transcription: TranscriptionResult,
+        cleaned: String,
+        analysis: SpeechActivityAnalysis
+    ) -> Bool {
+        guard analysis.vadAvailable, analysis.confidence == .borderline else {
+            return false
+        }
+
+        let wordCount = cleaned.split(whereSeparator: \.isWhitespace).count
+        let isShortUtterance = cleaned.count <= 24 || wordCount <= 3
+
+        if transcription.maxNoSpeechProbability >= 0.65 {
+            return true
+        }
+
+        if
+            transcription.averageNoSpeechProbability >= 0.55 &&
+            transcription.averageTokenProbability < 0.50
+        {
+            return true
+        }
+
+        if
+            isShortUtterance &&
+            transcription.averageNoSpeechProbability >= 0.40 &&
+            transcription.averageTokenProbability < 0.35 &&
+            transcription.evaluatedTokenCount > 0
+        {
+            return true
+        }
+
+        return false
     }
 
     private func handleRecordingStartFailure() {
