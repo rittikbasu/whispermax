@@ -12,6 +12,7 @@ enum ModelLocator {
     static let insertionPolicyFileURL = appSupportDirectory.appendingPathComponent("insertion-policy.json")
     static let onboardingCompleteFileURL = appSupportDirectory.appendingPathComponent("onboarding-complete")
     static let downloadResumeDataURL = appSupportDirectory.appendingPathComponent("model-download.resumedata")
+    static let debugRecordingsDirectory = appSupportDirectory.appendingPathComponent("DebugRecordings", isDirectory: true)
     static let modelsDirectory = appSupportDirectory.appendingPathComponent("Models", isDirectory: true)
     static let temporaryRecordingsDirectory = appSupportDirectory.appendingPathComponent("Recordings", isDirectory: true)
     static let appLocalModelURL = modelsDirectory.appendingPathComponent("ggml-large-v3-turbo.bin")

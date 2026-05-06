@@ -1,13 +1,26 @@
 import Foundation
 import whisper
 
-struct TranscriptionResult {
+struct TranscriptionTokenDiagnostic: Codable, Sendable {
+    let text: String
+    let probability: Float
+}
+
+struct TranscriptionSegmentDiagnostic: Codable, Sendable {
+    let text: String
+    let noSpeechProbability: Float
+    let includedInTranscript: Bool
+    let averageTokenProbability: Float
+    let tokens: [TranscriptionTokenDiagnostic]
+}
+
+struct TranscriptionResult: Sendable {
     let text: String
     let averageNoSpeechProbability: Float
     let maxNoSpeechProbability: Float
-    let segmentCount: Int
     let averageTokenProbability: Float
-    let evaluatedTokenCount: Int
+    let segmentCount: Int
+    let segmentDiagnostics: [TranscriptionSegmentDiagnostic]?
 }
 
 actor WhisperEngine {
@@ -24,6 +37,8 @@ actor WhisperEngine {
             }
         }
     }
+
+    private static let noSpeechSegmentThreshold: Float = 0.80
 
     private let modelURL: URL
     private var context: OpaquePointer?
@@ -47,16 +62,11 @@ actor WhisperEngine {
         self.context = context
     }
 
-    func transcribe(audioURL: URL, prompt: String? = nil) throws -> String {
-        let samples = try AudioSampleDecoder.decodeWhisperSamples(from: audioURL)
-        return try transcribe(samples: samples, prompt: prompt)
-    }
-
-    func transcribe(samples: [Float], prompt: String? = nil) throws -> String {
-        try transcribeResult(samples: samples, prompt: prompt).text
-    }
-
-    func transcribeResult(samples: [Float], prompt: String? = nil) throws -> TranscriptionResult {
+    func transcribe(
+        samples: [Float],
+        prompt: String? = nil,
+        includeTokenDiagnostics: Bool = false
+    ) throws -> TranscriptionResult {
         try prepare()
 
         guard let context else {
@@ -97,37 +107,93 @@ actor WhisperEngine {
             throw EngineError.transcriptionFailed
         }
 
-        let segmentCount = whisper_full_n_segments(context)
+        let segmentCount = Int(whisper_full_n_segments(context))
         var transcript = ""
         var noSpeechProbabilities: [Float] = []
         var tokenProbabilitySum: Float = 0
         var evaluatedTokenCount = 0
+        var segmentDiagnostics: [TranscriptionSegmentDiagnostic] = []
+        if includeTokenDiagnostics {
+            segmentDiagnostics.reserveCapacity(segmentCount)
+        }
 
         for index in 0..<segmentCount {
-            transcript += String(cString: whisper_full_get_segment_text(context, index))
-            noSpeechProbabilities.append(
-                whisper_full_get_segment_no_speech_prob(context, index)
-            )
+            let noSpeechProbability = whisper_full_get_segment_no_speech_prob(context, Int32(index))
+            noSpeechProbabilities.append(noSpeechProbability)
+            let segmentText = String(cString: whisper_full_get_segment_text(context, Int32(index)))
+            let includedInTranscript = noSpeechProbability < Self.noSpeechSegmentThreshold
 
-            let tokenCount = whisper_full_n_tokens(context, index)
+            if includedInTranscript {
+                transcript += segmentText
+            }
+
+            let tokenCount = Int(whisper_full_n_tokens(context, Int32(index)))
+            var segmentTokens: [TranscriptionTokenDiagnostic] = []
+            var segmentProbabilitySum: Float = 0
+            var segmentEvaluatedTokenCount = 0
+            if includeTokenDiagnostics {
+                segmentTokens.reserveCapacity(tokenCount)
+            }
+
             guard tokenCount > 0 else {
+                if includeTokenDiagnostics {
+                    segmentDiagnostics.append(
+                        TranscriptionSegmentDiagnostic(
+                            text: segmentText,
+                            noSpeechProbability: noSpeechProbability,
+                            includedInTranscript: includedInTranscript,
+                            averageTokenProbability: 0,
+                            tokens: []
+                        )
+                    )
+                }
                 continue
             }
 
             for tokenIndex in 0..<tokenCount {
-                let tokenText = String(cString: whisper_full_get_token_text(context, index, tokenIndex))
-                guard !tokenText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+                let tokenText = String(cString: whisper_full_get_token_text(context, Int32(index), Int32(tokenIndex)))
+                let trimmedTokenText = tokenText.trimmingCharacters(in: .whitespacesAndNewlines)
+                guard !trimmedTokenText.isEmpty else {
                     continue
                 }
 
-                tokenProbabilitySum += whisper_full_get_token_p(context, index, tokenIndex)
+                let tokenProbability = whisper_full_get_token_p(context, Int32(index), Int32(tokenIndex))
+                tokenProbabilitySum += tokenProbability
                 evaluatedTokenCount += 1
+                segmentProbabilitySum += tokenProbability
+                segmentEvaluatedTokenCount += 1
+
+                if includeTokenDiagnostics {
+                    segmentTokens.append(
+                        TranscriptionTokenDiagnostic(
+                            text: trimmedTokenText,
+                            probability: tokenProbability
+                        )
+                    )
+                }
+            }
+
+            if includeTokenDiagnostics {
+                let averageSegmentTokenProbability = segmentEvaluatedTokenCount == 0
+                    ? 0
+                    : segmentProbabilitySum / Float(segmentEvaluatedTokenCount)
+
+                segmentDiagnostics.append(
+                    TranscriptionSegmentDiagnostic(
+                        text: segmentText,
+                        noSpeechProbability: noSpeechProbability,
+                        includedInTranscript: includedInTranscript,
+                        averageTokenProbability: averageSegmentTokenProbability,
+                        tokens: segmentTokens
+                    )
+                )
             }
         }
 
         let averageNoSpeechProbability = noSpeechProbabilities.isEmpty
             ? 0
             : noSpeechProbabilities.reduce(0, +) / Float(noSpeechProbabilities.count)
+        let maxNoSpeechProbability = noSpeechProbabilities.max() ?? 0
         let averageTokenProbability = evaluatedTokenCount == 0
             ? 0
             : tokenProbabilitySum / Float(evaluatedTokenCount)
@@ -135,10 +201,10 @@ actor WhisperEngine {
         return TranscriptionResult(
             text: transcript,
             averageNoSpeechProbability: averageNoSpeechProbability,
-            maxNoSpeechProbability: noSpeechProbabilities.max() ?? 0,
-            segmentCount: Int(segmentCount),
+            maxNoSpeechProbability: maxNoSpeechProbability,
             averageTokenProbability: averageTokenProbability,
-            evaluatedTokenCount: evaluatedTokenCount
+            segmentCount: segmentCount,
+            segmentDiagnostics: includeTokenDiagnostics ? segmentDiagnostics : nil
         )
     }
 }
