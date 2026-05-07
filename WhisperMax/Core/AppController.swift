@@ -402,7 +402,7 @@ final class AppController {
     }
 
     var needsSetup: Bool {
-        !microphoneGranted || !accessibilityGranted
+        !microphoneGranted
     }
 
     var defaultInputDeviceName: String {
@@ -528,10 +528,6 @@ final class AppController {
     var homeSubtitle: String {
         if !microphoneGranted {
             return "Grant microphone access to start dictation"
-        }
-
-        if !accessibilityGranted {
-            return "Allow Accessibility to insert text automatically"
         }
 
         switch phase {
@@ -906,7 +902,7 @@ final class AppController {
                 self.syncPermissionState()
 
                 let isBoostActive = (self.permissionMonitorBoostUntil ?? .distantPast) > Date()
-                let intervalMilliseconds: UInt64 = (isBoostActive || !self.accessibilityGranted) ? 350 : 1500
+                let intervalMilliseconds: UInt64 = (isBoostActive || !self.microphoneGranted) ? 350 : 1500
                 try? await Task.sleep(for: .milliseconds(intervalMilliseconds))
             }
         }
@@ -1458,10 +1454,6 @@ final class AppController {
     private var idleStatusText: String {
         if !microphoneGranted {
             return "Grant microphone access to start dictation."
-        }
-
-        if !accessibilityGranted {
-            return "Allow Accessibility for automatic insertion."
         }
 
         return whisperEngine == nil ? "Loading local model..." : "Ready when you are"

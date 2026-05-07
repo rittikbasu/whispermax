@@ -369,19 +369,19 @@ private struct PermissionsCard: View {
 
     private var micGranted: Bool { controller.microphoneGranted }
     private var accessGranted: Bool { controller.accessibilityGranted }
-    private var canContinue: Bool { micGranted && accessGranted }
+    private var canContinue: Bool { micGranted }
 
     var body: some View {
         VStack(spacing: 0) {
             VStack(alignment: .center, spacing: 10) {
-                Text("Two quick permissions")
+                Text("Set up dictation")
                     .font(.system(size: 28, weight: .semibold))
                     .tracking(-0.8)
                     .foregroundStyle(OnboardingTheme.headlineText)
                     .opacity(headerVisible ? 1 : 0)
                     .offset(y: headerVisible ? 0 : 12)
 
-                Text("Everything runs on-device. These stay local.")
+                Text("Microphone is required. Direct Insert is optional.")
                     .font(.system(size: 15, weight: .regular))
                     .foregroundStyle(OnboardingTheme.bodyText)
                     .opacity(headerVisible ? 1 : 0)
@@ -394,7 +394,7 @@ private struct PermissionsCard: View {
                 PermissionCard(
                     icon: "mic.fill",
                     title: "Microphone",
-                    subtitle: micGranted ? "Granted" : "To hear your voice.",
+                    subtitle: micGranted ? "Granted" : "Required to capture your voice.",
                     isGranted: micGranted,
                     buttonTitle: "Grant Access",
                     action: {
@@ -408,11 +408,11 @@ private struct PermissionsCard: View {
 
                 PermissionCard(
                     icon: "accessibility",
-                    title: "Accessibility",
-                    subtitle: accessGranted ? "Granted" : "To type text into any app.",
+                    title: "Direct Insert",
+                    subtitle: accessGranted ? "Enabled" : "Optional. Types text into focused fields.",
                     isGranted: accessGranted,
                     isActive: micGranted,
-                    buttonTitle: "Open Settings",
+                    buttonTitle: "Enable",
                     action: controller.beginAccessibilityPermissionFlow
                 )
                 .opacity(accessCardVisible ? 1 : 0)
