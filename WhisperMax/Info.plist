@@ -25,7 +25,7 @@
 	<key>LSUIElement</key>
 	<true/>
 	<key>NSAccessibilityUsageDescription</key>
-	<string>whispermax needs Accessibility access to insert transcriptions into other apps.</string>
+	<string>whispermax uses Accessibility access to insert transcriptions into other apps when Direct Insert is enabled.</string>
 	<key>NSMicrophoneUsageDescription</key>
 	<string>whispermax records your voice for local transcription.</string>
 	<key>SUAllowsAutomaticUpdates</key>

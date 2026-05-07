@@ -85,14 +85,6 @@ struct MenuBarView: View {
                     Text(controller.inputMenuLabel)
                 }
 
-                if !controller.accessibilityGranted {
-                    Divider()
-
-                    Button("Prompt Accessibility Access") {
-                        controller.promptForAccessibility()
-                    }
-                }
-
                 Divider()
 
                 Button("Quit whispermax") {

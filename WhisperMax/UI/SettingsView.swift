@@ -410,20 +410,18 @@ private struct PermissionsSettingsCard: View {
                 )
 
                 PermissionStatusRow(
-                    title: "Accessibility",
-                    subtitleGranted: "Inserts transcriptions into other apps.",
-                    subtitlePending: "Needed to type into other apps.",
+                    title: "Direct Insert",
+                    subtitleGranted: "Types transcriptions into focused text fields.",
+                    subtitlePending: "Optional. Without it, transcripts are copied to clipboard.",
                     isGranted: controller.accessibilityGranted,
-                    buttonTitle: "Grant Access",
+                    buttonTitle: "Enable",
+                    pendingTint: .white.opacity(0.24),
                     action: controller.beginAccessibilityPermissionFlow
                 )
-
-                HStack {
-                    Spacer()
-                    RefreshLink(action: controller.refreshPermissions)
-                }
-                .padding(.top, 2)
             }
+        }
+        .onAppear {
+            controller.refreshPermissions()
         }
     }
 }
@@ -434,12 +432,13 @@ private struct PermissionStatusRow: View {
     let subtitlePending: String
     let isGranted: Bool
     let buttonTitle: String
+    var pendingTint: Color = SettingsTheme.pendingAmber
     let action: () -> Void
 
     var body: some View {
         HStack(spacing: 14) {
             Circle()
-                .fill(isGranted ? SettingsTheme.grantedGreen : SettingsTheme.pendingAmber)
+                .fill(isGranted ? SettingsTheme.grantedGreen : pendingTint)
                 .frame(width: 7, height: 7)
 
             VStack(alignment: .leading, spacing: 2) {
@@ -491,27 +490,6 @@ private struct PermissionStatusRow: View {
                         .stroke(SettingsTheme.rowBorder, lineWidth: 1)
                 )
         )
-    }
-}
-
-private struct RefreshLink: View {
-    let action: () -> Void
-    @State private var hovering = false
-
-    var body: some View {
-        Button(action: action) {
-            HStack(spacing: 5) {
-                Image(systemName: "arrow.clockwise")
-                    .font(.system(size: 10, weight: .semibold))
-                Text("Refresh permissions")
-                    .font(.system(size: 11.5, weight: .medium))
-            }
-            .foregroundStyle(.white.opacity(hovering ? 0.60 : 0.36))
-        }
-        .buttonStyle(.plain)
-        .onHover { hovering = $0 }
-        .help("Re-check system permission status")
-        .animation(.easeOut(duration: 0.14), value: hovering)
     }
 }
 

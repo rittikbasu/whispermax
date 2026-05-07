@@ -360,11 +360,11 @@ private struct PermissionSetupPanel: View {
                     .tracking(2.4)
                     .foregroundStyle(.white.opacity(0.5))
 
-                Text("Finish permissions for automatic dictation.")
+                Text("Grant microphone access to start dictation.")
                     .font(.system(size: 17, weight: .semibold))
                     .foregroundStyle(.white.opacity(0.9))
 
-                Text("Microphone lets whispermax record. Accessibility lets it insert text into other apps.")
+                Text("whispermax records locally and can still copy transcripts without Direct Insert.")
                     .font(.system(size: 13, weight: .regular))
                     .foregroundStyle(.white.opacity(0.42))
             }
@@ -376,13 +376,6 @@ private struct PermissionSetupPanel: View {
                     isGranted: controller.microphoneGranted,
                     buttonTitle: "Open Microphone Settings",
                     action: controller.openMicrophoneSettings
-                )
-                PermissionRow(
-                    title: "Accessibility",
-                    subtitle: controller.accessibilityGranted ? "Ready" : "Required for direct insertion into other apps",
-                    isGranted: controller.accessibilityGranted,
-                    buttonTitle: "Open Accessibility Settings",
-                    action: controller.beginAccessibilityPermissionFlow
                 )
             }
         }
@@ -678,7 +671,7 @@ private struct EmptyHistoryState: View {
         }
 
         if controller.needsSetup {
-            return "Finish setup above, then press \(controller.hotkeyInstructionText) to start recording."
+            return "Grant microphone access, then press \(controller.hotkeyInstructionText) to start recording."
         }
 
         return "Press \(controller.hotkeyInstructionText), talk, and your transcriptions will appear here."
