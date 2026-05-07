@@ -3,12 +3,29 @@ import Foundation
 
 final class AudioRecorderService {
     enum RecorderError: LocalizedError {
+        case inputUnavailable(sampleRate: Double, channelCount: AVAudioChannelCount)
+        case engineStartFailed(String)
         case couldNotStartRecording
 
         var errorDescription: String? {
             switch self {
+            case .inputUnavailable:
+                return "Audio input is still switching. Try again in a moment."
+            case .engineStartFailed:
+                return "Audio input could not start. Try again in a moment."
             case .couldNotStartRecording:
                 return "Could not start recording."
+            }
+        }
+
+        var logDescription: String {
+            switch self {
+            case .inputUnavailable(let sampleRate, let channelCount):
+                return "input unavailable (sampleRate=\(sampleRate), channelCount=\(channelCount))"
+            case .engineStartFailed(let message):
+                return "engine start failed (\(message))"
+            case .couldNotStartRecording:
+                return "could not start recording"
             }
         }
     }
@@ -43,6 +60,7 @@ final class AudioRecorderService {
 
         guard
             hardwareFormat.channelCount > 0,
+            hardwareFormat.sampleRate > 0,
             let inputFormat = AVAudioFormat(
                 commonFormat: .pcmFormatFloat32,
                 sampleRate: hardwareFormat.sampleRate,
@@ -50,7 +68,10 @@ final class AudioRecorderService {
                 interleaved: false
             )
         else {
-            throw RecorderError.couldNotStartRecording
+            throw RecorderError.inputUnavailable(
+                sampleRate: hardwareFormat.sampleRate,
+                channelCount: hardwareFormat.channelCount
+            )
         }
 
         let recordingFile = try AVAudioFile(
@@ -93,7 +114,7 @@ final class AudioRecorderService {
             self.recordingURL = nil
             self.isRecording = false
             stateLock.unlock()
-            throw RecorderError.couldNotStartRecording
+            throw RecorderError.engineStartFailed(error.localizedDescription)
         }
     }
 

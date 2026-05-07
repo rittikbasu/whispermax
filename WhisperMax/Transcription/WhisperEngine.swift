@@ -1,6 +1,27 @@
-import AVFoundation
 import Foundation
 import whisper
+
+struct TranscriptionTokenDiagnostic: Codable, Sendable {
+    let text: String
+    let probability: Float
+}
+
+struct TranscriptionSegmentDiagnostic: Codable, Sendable {
+    let text: String
+    let noSpeechProbability: Float
+    let includedInTranscript: Bool
+    let averageTokenProbability: Float
+    let tokens: [TranscriptionTokenDiagnostic]
+}
+
+struct TranscriptionResult: Sendable {
+    let text: String
+    let averageNoSpeechProbability: Float
+    let maxNoSpeechProbability: Float
+    let averageTokenProbability: Float
+    let segmentCount: Int
+    let segmentDiagnostics: [TranscriptionSegmentDiagnostic]?
+}
 
 actor WhisperEngine {
     enum EngineError: LocalizedError {
@@ -16,6 +37,8 @@ actor WhisperEngine {
             }
         }
     }
+
+    private static let noSpeechSegmentThreshold: Float = 0.80
 
     private let modelURL: URL
     private var context: OpaquePointer?
@@ -39,14 +62,17 @@ actor WhisperEngine {
         self.context = context
     }
 
-    func transcribe(audioURL: URL, prompt: String? = nil) throws -> String {
+    func transcribe(
+        samples: [Float],
+        prompt: String? = nil,
+        includeTokenDiagnostics: Bool = false
+    ) throws -> TranscriptionResult {
         try prepare()
 
         guard let context else {
             throw EngineError.initializationFailed
         }
 
-        let samples = try decodeAudioFile(audioURL)
         let maxThreads = max(1, min(8, ProcessInfo.processInfo.processorCount - 2))
         let transcriptionPrompt = prompt?
             .trimmingCharacters(in: .whitespacesAndNewlines)
@@ -81,97 +107,104 @@ actor WhisperEngine {
             throw EngineError.transcriptionFailed
         }
 
-        let segmentCount = whisper_full_n_segments(context)
+        let segmentCount = Int(whisper_full_n_segments(context))
         var transcript = ""
+        var noSpeechProbabilities: [Float] = []
+        var tokenProbabilitySum: Float = 0
+        var evaluatedTokenCount = 0
+        var segmentDiagnostics: [TranscriptionSegmentDiagnostic] = []
+        if includeTokenDiagnostics {
+            segmentDiagnostics.reserveCapacity(segmentCount)
+        }
 
         for index in 0..<segmentCount {
-            transcript += String(cString: whisper_full_get_segment_text(context, index))
+            let noSpeechProbability = whisper_full_get_segment_no_speech_prob(context, Int32(index))
+            noSpeechProbabilities.append(noSpeechProbability)
+            let segmentText = String(cString: whisper_full_get_segment_text(context, Int32(index)))
+            let includedInTranscript = noSpeechProbability < Self.noSpeechSegmentThreshold
+
+            if includedInTranscript {
+                transcript += segmentText
+            }
+
+            let tokenCount = Int(whisper_full_n_tokens(context, Int32(index)))
+            var segmentTokens: [TranscriptionTokenDiagnostic] = []
+            var segmentProbabilitySum: Float = 0
+            var segmentEvaluatedTokenCount = 0
+            if includeTokenDiagnostics {
+                segmentTokens.reserveCapacity(tokenCount)
+            }
+
+            guard tokenCount > 0 else {
+                if includeTokenDiagnostics {
+                    segmentDiagnostics.append(
+                        TranscriptionSegmentDiagnostic(
+                            text: segmentText,
+                            noSpeechProbability: noSpeechProbability,
+                            includedInTranscript: includedInTranscript,
+                            averageTokenProbability: 0,
+                            tokens: []
+                        )
+                    )
+                }
+                continue
+            }
+
+            for tokenIndex in 0..<tokenCount {
+                let tokenText = String(cString: whisper_full_get_token_text(context, Int32(index), Int32(tokenIndex)))
+                let trimmedTokenText = tokenText.trimmingCharacters(in: .whitespacesAndNewlines)
+                guard !trimmedTokenText.isEmpty else {
+                    continue
+                }
+
+                let tokenProbability = whisper_full_get_token_p(context, Int32(index), Int32(tokenIndex))
+                tokenProbabilitySum += tokenProbability
+                evaluatedTokenCount += 1
+                segmentProbabilitySum += tokenProbability
+                segmentEvaluatedTokenCount += 1
+
+                if includeTokenDiagnostics {
+                    segmentTokens.append(
+                        TranscriptionTokenDiagnostic(
+                            text: trimmedTokenText,
+                            probability: tokenProbability
+                        )
+                    )
+                }
+            }
+
+            if includeTokenDiagnostics {
+                let averageSegmentTokenProbability = segmentEvaluatedTokenCount == 0
+                    ? 0
+                    : segmentProbabilitySum / Float(segmentEvaluatedTokenCount)
+
+                segmentDiagnostics.append(
+                    TranscriptionSegmentDiagnostic(
+                        text: segmentText,
+                        noSpeechProbability: noSpeechProbability,
+                        includedInTranscript: includedInTranscript,
+                        averageTokenProbability: averageSegmentTokenProbability,
+                        tokens: segmentTokens
+                    )
+                )
+            }
         }
 
-        return transcript
-    }
-}
+        let averageNoSpeechProbability = noSpeechProbabilities.isEmpty
+            ? 0
+            : noSpeechProbabilities.reduce(0, +) / Float(noSpeechProbabilities.count)
+        let maxNoSpeechProbability = noSpeechProbabilities.max() ?? 0
+        let averageTokenProbability = evaluatedTokenCount == 0
+            ? 0
+            : tokenProbabilitySum / Float(evaluatedTokenCount)
 
-private func decodeAudioFile(_ url: URL) throws -> [Float] {
-    let audioFile = try AVAudioFile(forReading: url)
-    let sourceFormat = audioFile.processingFormat
-    let sourceFrameCount = AVAudioFrameCount(audioFile.length)
-
-    guard
-        sourceFrameCount > 0,
-        let sourceBuffer = AVAudioPCMBuffer(pcmFormat: sourceFormat, frameCapacity: sourceFrameCount)
-    else {
-        return []
-    }
-
-    try audioFile.read(into: sourceBuffer)
-
-    guard
-        let targetFormat = AVAudioFormat(
-            commonFormat: .pcmFormatFloat32,
-            sampleRate: 16_000,
-            channels: 1,
-            interleaved: false
-        )
-    else {
-        return []
-    }
-
-    if
-        sourceFormat.sampleRate == targetFormat.sampleRate,
-        sourceFormat.channelCount == targetFormat.channelCount,
-        sourceFormat.commonFormat == targetFormat.commonFormat,
-        sourceFormat.isInterleaved == targetFormat.isInterleaved,
-        let channelData = sourceBuffer.floatChannelData
-    {
-        return Array(
-            UnsafeBufferPointer(
-                start: channelData[0],
-                count: Int(sourceBuffer.frameLength)
-            )
+        return TranscriptionResult(
+            text: transcript,
+            averageNoSpeechProbability: averageNoSpeechProbability,
+            maxNoSpeechProbability: maxNoSpeechProbability,
+            averageTokenProbability: averageTokenProbability,
+            segmentCount: segmentCount,
+            segmentDiagnostics: includeTokenDiagnostics ? segmentDiagnostics : nil
         )
     }
-
-    guard let converter = AVAudioConverter(from: sourceFormat, to: targetFormat) else {
-        return []
-    }
-
-    let outputFrameCapacity = AVAudioFrameCount(
-        ceil(Double(sourceBuffer.frameLength) * targetFormat.sampleRate / sourceFormat.sampleRate)
-    ) + 4_096
-
-    guard let outputBuffer = AVAudioPCMBuffer(
-        pcmFormat: targetFormat,
-        frameCapacity: outputFrameCapacity
-    ) else {
-        return []
-    }
-
-    var hasProvidedInput = false
-    var conversionError: NSError?
-    converter.convert(to: outputBuffer, error: &conversionError) { _, outStatus in
-        if hasProvidedInput {
-            outStatus.pointee = .endOfStream
-            return nil
-        }
-
-        hasProvidedInput = true
-        outStatus.pointee = .haveData
-        return sourceBuffer
-    }
-
-    if conversionError != nil {
-        return []
-    }
-
-    guard let channelData = outputBuffer.floatChannelData else {
-        return []
-    }
-
-    return Array(
-        UnsafeBufferPointer(
-            start: channelData[0],
-            count: Int(outputBuffer.frameLength)
-        )
-    )
 }

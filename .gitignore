@@ -4,3 +4,5 @@ build
 DerivedData
 dist/
 .DS_Store
+.vadlab/
+.vad-fixtures/

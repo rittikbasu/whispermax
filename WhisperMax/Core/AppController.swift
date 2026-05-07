@@ -36,12 +36,15 @@ enum RecordingPhase: Equatable {
 
 enum RecorderIssue: Equatable {
     case microphonePermissionRequired
+    case noSpeechDetected
     case generic(String)
 
     var statusMessage: String {
         switch self {
         case .microphonePermissionRequired:
             return "Microphone access is required for local dictation."
+        case .noSpeechDetected:
+            return "No speech detected."
         case .generic(let message):
             return message
         }
@@ -51,6 +54,8 @@ enum RecorderIssue: Equatable {
         switch self {
         case .microphonePermissionRequired:
             return "Microphone access needed"
+        case .noSpeechDetected:
+            return "No speech detected"
         case .generic:
             return "Try again"
         }
@@ -60,6 +65,8 @@ enum RecorderIssue: Equatable {
         switch self {
         case .microphonePermissionRequired:
             return nil
+        case .noSpeechDetected:
+            return "Try speaking a little louder or closer to the mic"
         case .generic:
             return "Recorder reset"
         }
@@ -69,6 +76,8 @@ enum RecorderIssue: Equatable {
         switch self {
         case .microphonePermissionRequired:
             return 4.2
+        case .noSpeechDetected:
+            return 2.2
         case .generic:
             return 1.8
         }
@@ -125,6 +134,8 @@ final class AppController {
     let permissionsManager = PermissionsManager()
     private let insertionService = TextInsertionService()
     private let recorder = AudioRecorderService()
+    private let speechActivityService = SpeechActivityService()
+    private let debugRecordingStore = DebugRecordingStore()
 
     private var whisperEngine: WhisperEngine?
     private var preRecordingSystemDefaultInputDeviceID: AudioObjectID?
@@ -684,17 +695,21 @@ final class AppController {
             }
 
             do {
-                prepareInputDeviceForRecording()
+                let switchedInputDevice = prepareInputDeviceForRecording()
                 recordingDuration = 0
                 lastTranscript = ""
                 pendingInsertionTarget = insertionService.captureTargetContext()
                 resetWaveform(active: true)
-                try recorder.start()
+                try await startRecorderWithRecovery(afterSwitchingInputDevice: switchedInputDevice)
                 statusText = "Listening…"
                 phase = .recording
             } catch {
                 handleRecordingStartFailure()
-                setError("Failed to start recording.")
+                if let recorderError = error as? AudioRecorderService.RecorderError {
+                    setError(recorderError.errorDescription ?? "Failed to start recording.")
+                } else {
+                    setError("Failed to start recording.")
+                }
             }
 
             return
@@ -966,18 +981,18 @@ final class AppController {
         return "Preferred spellings: \(selectedTerms.joined(separator: ", "))"
     }
 
-    private func prepareInputDeviceForRecording() {
+    private func prepareInputDeviceForRecording() -> Bool {
         refreshInputDevices()
         preRecordingSystemDefaultInputDeviceID = nil
         recordingPinnedDeviceID = nil
 
         guard let preferredPinnedInput else {
-            return
+            return false
         }
 
         guard let pinnedDevice = preferredPinnedInput.resolvedDevice(in: inputDevices) else {
             setMenuFeedback("\(preferredPinnedInput.name) unavailable. Using System Default")
-            return
+            return false
         }
 
         let pinnedDeviceID = pinnedDevice.audioObjectID
@@ -985,7 +1000,7 @@ final class AppController {
         recordingPinnedDeviceID = pinnedDeviceID
 
         guard defaultInputDeviceID != pinnedDeviceID else {
-            return
+            return false
         }
 
         let originalDefaultInputDeviceID = defaultInputDeviceID
@@ -994,10 +1009,53 @@ final class AppController {
             try inputDeviceService.setDefaultInputDevice(pinnedDeviceID)
             preRecordingSystemDefaultInputDeviceID = originalDefaultInputDeviceID
             refreshInputDevices()
+            return true
         } catch {
             recordingPinnedDeviceID = nil
             setMenuFeedback("Couldn’t switch to \(preferredPinnedInput.name). Using System Default")
+            return false
         }
+    }
+
+    private func startRecorderWithRecovery(afterSwitchingInputDevice switchedInputDevice: Bool) async throws {
+        if switchedInputDevice {
+            try? await Task.sleep(for: .milliseconds(220))
+            refreshInputDevices()
+        }
+
+        var retryDelayMilliseconds = switchedInputDevice ? 180 : 120
+        var lastError: Error?
+
+        for attempt in 0..<3 {
+            do {
+                try recorder.start()
+                return
+            } catch let recorderError as AudioRecorderService.RecorderError {
+                lastError = recorderError
+                NSLog("Recorder start attempt %d failed: %@", attempt + 1, recorderError.logDescription)
+
+                guard attempt < 2 else {
+                    throw recorderError
+                }
+
+                refreshInputDevices()
+                try? await Task.sleep(for: .milliseconds(retryDelayMilliseconds))
+                retryDelayMilliseconds *= 2
+            } catch {
+                lastError = error
+                NSLog("Recorder start attempt %d failed with unexpected error: %@", attempt + 1, error.localizedDescription)
+
+                guard attempt < 2 else {
+                    throw error
+                }
+
+                refreshInputDevices()
+                try? await Task.sleep(for: .milliseconds(retryDelayMilliseconds))
+                retryDelayMilliseconds *= 2
+            }
+        }
+
+        throw lastError ?? AudioRecorderService.RecorderError.couldNotStartRecording
     }
 
     private func restoreSystemInputAfterRecordingIfNeeded() {
@@ -1071,31 +1129,99 @@ final class AppController {
         }
 
         guard let whisperEngine else {
+            captureDebugRecording(
+                from: url,
+                result: .error,
+                transcript: nil,
+                insertionMethod: nil,
+                issueMessage: nil,
+                errorMessage: "The local Whisper engine is not ready.",
+                diagnostics: nil,
+                chunks: [],
+                transcriptionPasses: []
+            )
             setError("The local Whisper engine is not ready.")
             return
         }
 
         do {
-            let rawText = try await whisperEngine.transcribe(
-                audioURL: url,
-                prompt: preferredTranscriptionPrompt
-            )
-            let cleaned = TranscriptFormatter.normalize(
-                rawText,
-                preferredTerms: preferredTranscriptionTerms
-            )
+            let preparedAudio = try speechActivityService.prepareTranscriptionAudio(from: url)
+            let cleanedTranscript: String
+            let includeTokenDiagnostics = debugRecordingStore.isEnabled
+            var transcriptionPasses: [DebugRecordingTranscriptionPass] = []
 
-            guard !cleaned.isEmpty else {
-                setError("No speech was detected.")
+            switch preparedAudio {
+            case .noSpeech:
+                captureDebugRecording(
+                    from: url,
+                    result: .noSpeech,
+                    transcript: nil,
+                    insertionMethod: nil,
+                    issueMessage: RecorderIssue.noSpeechDetected.statusMessage,
+                    errorMessage: nil,
+                    diagnostics: preparedAudio.diagnostics,
+                    chunks: preparedAudio.debugChunkPlans,
+                    transcriptionPasses: []
+                )
+                setNoSpeechDetected()
                 return
+            case .singlePass(let samples, let diagnostics):
+                let execution = try await transcribeSinglePass(
+                    samples: samples,
+                    using: whisperEngine,
+                    includeTokenDiagnostics: includeTokenDiagnostics,
+                    mode: diagnostics.mode
+                )
+                transcriptionPasses = execution.debugPasses
+
+                guard let transcript = execution.text else {
+                    captureDebugRecording(
+                        from: url,
+                        result: .noSpeech,
+                        transcript: nil,
+                        insertionMethod: nil,
+                        issueMessage: RecorderIssue.noSpeechDetected.statusMessage,
+                        errorMessage: nil,
+                        diagnostics: preparedAudio.diagnostics,
+                        chunks: preparedAudio.debugChunkPlans,
+                        transcriptionPasses: transcriptionPasses
+                    )
+                    setNoSpeechDetected()
+                    return
+                }
+                cleanedTranscript = transcript
+            case .chunked(let chunks, _):
+                let execution = try await transcribeChunked(
+                    chunks: chunks,
+                    using: whisperEngine,
+                    includeTokenDiagnostics: includeTokenDiagnostics
+                )
+                transcriptionPasses = execution.debugPasses
+
+                guard let transcript = execution.text else {
+                    captureDebugRecording(
+                        from: url,
+                        result: .noSpeech,
+                        transcript: nil,
+                        insertionMethod: nil,
+                        issueMessage: RecorderIssue.noSpeechDetected.statusMessage,
+                        errorMessage: nil,
+                        diagnostics: preparedAudio.diagnostics,
+                        chunks: preparedAudio.debugChunkPlans,
+                        transcriptionPasses: transcriptionPasses
+                    )
+                    setNoSpeechDetected()
+                    return
+                }
+                cleanedTranscript = transcript
             }
 
-            let insertionMethod = await insertionService.insert(cleaned, target: pendingInsertionTarget)
-            lastTranscript = cleaned
+            let insertionMethod = await insertionService.insert(cleanedTranscript, target: pendingInsertionTarget)
+            lastTranscript = cleanedTranscript
 
             let entry = TranscriptEntry(
                 id: UUID(),
-                text: cleaned,
+                text: cleanedTranscript,
                 createdAt: Date(),
                 duration: recordingDuration,
                 insertionMethod: insertionMethod,
@@ -1109,17 +1235,169 @@ final class AppController {
             case .accessibility:
                 statusText = "Inserted directly."
             case .clipboard:
-                statusText = "Pasted and restored clipboard."
+                statusText = "Pasted into your app."
             case .copied:
                 statusText = "Copied to clipboard."
             }
+            captureDebugRecording(
+                from: url,
+                result: debugCaptureResult(for: insertionMethod),
+                transcript: cleanedTranscript,
+                insertionMethod: insertionMethod,
+                issueMessage: nil,
+                errorMessage: nil,
+                diagnostics: preparedAudio.diagnostics,
+                chunks: preparedAudio.debugChunkPlans,
+                transcriptionPasses: transcriptionPasses
+            )
             phase = .inserted(insertionMethod)
             transitionToReady(after: 0.9)
         } catch {
+            captureDebugRecording(
+                from: url,
+                result: .error,
+                transcript: nil,
+                insertionMethod: nil,
+                issueMessage: nil,
+                errorMessage: error.localizedDescription,
+                diagnostics: nil,
+                chunks: [],
+                transcriptionPasses: []
+            )
             setError(error.localizedDescription)
         }
     }
 
+    private struct TranscriptionExecution {
+        let text: String?
+        let debugPasses: [DebugRecordingTranscriptionPass]
+    }
+
+    private func transcribeSinglePass(
+        samples: [Float],
+        using whisperEngine: WhisperEngine,
+        includeTokenDiagnostics: Bool,
+        mode: SpeechActivityDiagnostics.Mode
+    ) async throws -> TranscriptionExecution {
+        let result = try await whisperEngine.transcribe(
+            samples: samples,
+            prompt: preferredTranscriptionPrompt,
+            includeTokenDiagnostics: includeTokenDiagnostics
+        )
+
+        let cleaned = TranscriptFormatter.normalize(
+            result.text,
+            preferredTerms: preferredTranscriptionTerms
+        )
+
+        let selectedDuration = Double(samples.count) / AudioSampleDecoder.targetSampleRate
+        let shouldReject = cleaned.isEmpty || TranscriptionChunkPolicy.shouldRejectSinglePass(
+            result: result,
+            text: cleaned,
+            selectedDuration: selectedDuration,
+            mode: mode
+        )
+
+        return TranscriptionExecution(
+            text: shouldReject ? nil : cleaned,
+            debugPasses: [
+                makeDebugTranscriptionPass(
+                    index: 0,
+                    accepted: !shouldReject,
+                    transcript: cleaned,
+                    selectedDuration: selectedDuration,
+                    result: result
+                )
+            ]
+        )
+    }
+
+    private func transcribeChunked(
+        chunks: [SpeechChunk],
+        using whisperEngine: WhisperEngine,
+        includeTokenDiagnostics: Bool
+    ) async throws -> TranscriptionExecution {
+        var chunkTexts: [String] = []
+        chunkTexts.reserveCapacity(chunks.count)
+        var rollingContext = preferredTranscriptionPrompt ?? ""
+        var debugPasses: [DebugRecordingTranscriptionPass] = []
+        debugPasses.reserveCapacity(chunks.count)
+
+        for (index, chunk) in chunks.enumerated() {
+            let result = try await whisperEngine.transcribe(
+                samples: chunk.samples,
+                prompt: composeChunkPrompt(basePrompt: preferredTranscriptionPrompt, rollingContext: rollingContext),
+                includeTokenDiagnostics: includeTokenDiagnostics
+            )
+
+            let cleaned = TranscriptFormatter.normalize(
+                result.text,
+                preferredTerms: preferredTranscriptionTerms
+            )
+
+            let shouldReject = cleaned.isEmpty || TranscriptionChunkPolicy.shouldReject(
+                result: result,
+                text: cleaned,
+                chunk: chunk
+            )
+            debugPasses.append(
+                makeDebugTranscriptionPass(
+                    index: index,
+                    accepted: !shouldReject,
+                    transcript: cleaned,
+                    selectedDuration: chunk.duration,
+                    result: result
+                )
+            )
+
+            guard !cleaned.isEmpty else {
+                continue
+            }
+
+            if shouldReject {
+                continue
+            }
+
+            chunkTexts.append(cleaned)
+            rollingContext = updatedChunkContext(from: chunkTexts)
+        }
+
+        let stitched = TranscriptFormatter.stitch(
+            chunkTexts,
+            preferredTerms: preferredTranscriptionTerms
+        )
+
+        return TranscriptionExecution(
+            text: stitched.isEmpty ? nil : stitched,
+            debugPasses: debugPasses
+        )
+    }
+
+    private func composeChunkPrompt(basePrompt: String?, rollingContext: String) -> String? {
+        let base = basePrompt?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let context = rollingContext.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        switch (base.isEmpty, context.isEmpty) {
+        case (true, true):
+            return nil
+        case (false, true):
+            return base
+        case (true, false):
+            return context
+        case (false, false):
+            return "\(base)\n\nRecent transcript context:\n\(context)"
+        }
+    }
+
+    private func updatedChunkContext(from chunkTexts: [String]) -> String {
+        guard let lastText = chunkTexts.last else {
+            return ""
+        }
+
+        let tokens = lastText.split(whereSeparator: \.isWhitespace)
+        let window = tokens.suffix(36)
+        return window.joined(separator: " ")
+    }
     private func breakIfModelUnavailable() {
         if whisperEngine == nil {
             statusText = "The model is still loading."
@@ -1147,6 +1425,10 @@ final class AppController {
 
     private func setError(_ message: String) {
         setRecorderIssue(.generic(message))
+    }
+
+    private func setNoSpeechDetected() {
+        setRecorderIssue(.noSpeechDetected)
     }
 
     private func handleRecordingStartFailure() {
@@ -1292,5 +1574,61 @@ final class AppController {
         }
 
         return history.first?.text
+    }
+
+    private func debugCaptureResult(for insertionMethod: InsertionMethod) -> DebugRecordingCaptureResult {
+        switch insertionMethod {
+        case .accessibility:
+            return .inserted
+        case .clipboard:
+            return .clipboard
+        case .copied:
+            return .copied
+        }
+    }
+
+    private func captureDebugRecording(
+        from audioURL: URL,
+        result: DebugRecordingCaptureResult,
+        transcript: String?,
+        insertionMethod: InsertionMethod?,
+        issueMessage: String?,
+        errorMessage: String?,
+        diagnostics: SpeechActivityDiagnostics?,
+        chunks: [DebugRecordingChunkPlan],
+        transcriptionPasses: [DebugRecordingTranscriptionPass]
+    ) {
+        debugRecordingStore.capture(
+            audioURL: audioURL,
+            recordingDuration: diagnostics?.originalDuration ?? recordingDuration,
+            result: result,
+            transcript: transcript,
+            insertionMethod: insertionMethod,
+            issueMessage: issueMessage,
+            errorMessage: errorMessage,
+            diagnostics: diagnostics,
+            chunks: chunks,
+            transcriptionPasses: transcriptionPasses
+        )
+    }
+
+    private func makeDebugTranscriptionPass(
+        index: Int,
+        accepted: Bool,
+        transcript: String,
+        selectedDuration: TimeInterval,
+        result: TranscriptionResult
+    ) -> DebugRecordingTranscriptionPass {
+        DebugRecordingTranscriptionPass(
+            index: index,
+            accepted: accepted,
+            transcript: transcript,
+            selectedDuration: selectedDuration,
+            averageNoSpeechProbability: result.averageNoSpeechProbability,
+            maxNoSpeechProbability: result.maxNoSpeechProbability,
+            averageTokenProbability: result.averageTokenProbability,
+            segmentCount: result.segmentCount,
+            segmentDiagnostics: result.segmentDiagnostics ?? []
+        )
     }
 }
