@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 
 private enum Theme {
@@ -35,6 +36,30 @@ private enum Layout {
     static let historySpacing: CGFloat = 18
     static let historyInitialViewportCount = 60
     static let historyBatchCount = 80
+}
+
+@MainActor
+private enum AppIconCache {
+    private static let icons = NSCache<NSString, NSImage>()
+
+    static func icon(for bundleIdentifier: String?) -> NSImage? {
+        guard let bundleIdentifier else {
+            return nil
+        }
+
+        let cacheKey = bundleIdentifier as NSString
+        if let cachedIcon = icons.object(forKey: cacheKey) {
+            return cachedIcon
+        }
+
+        guard let appURL = NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleIdentifier) else {
+            return nil
+        }
+
+        let icon = NSWorkspace.shared.icon(forFile: appURL.path)
+        icons.setObject(icon, forKey: cacheKey)
+        return icon
+    }
 }
 
 struct MainWindowView: View {
@@ -711,7 +736,9 @@ private struct HistoryRow: View {
                 HistoryRowMetadata(
                     wordCountText: wordCountText,
                     durationText: formattedDurationText,
-                    modelText: entry.modelName
+                    modelText: entry.modelName,
+                    insertionTargetName: entry.insertionTargetName,
+                    insertionTargetBundleIdentifier: entry.insertionTargetBundleIdentifier
                 )
             }
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -770,6 +797,8 @@ private struct HistoryRowMetadata: View {
     let wordCountText: String
     let durationText: String
     let modelText: String
+    let insertionTargetName: String?
+    let insertionTargetBundleIdentifier: String?
 
     var body: some View {
         HStack(spacing: 14) {
@@ -779,8 +808,31 @@ private struct HistoryRowMetadata: View {
                 .monospacedDigit()
             MetadataDot()
             metadataText(modelText)
+            if let insertionTargetName, !insertionTargetName.isEmpty {
+                MetadataDot()
+                insertionTarget(name: insertionTargetName)
+            }
         }
         .lineLimit(1)
+    }
+
+    private func insertionTarget(name: String) -> some View {
+        HStack(spacing: 5) {
+            if let icon = insertionTargetIcon {
+                Image(nsImage: icon)
+                    .resizable()
+                    .interpolation(.high)
+                    .frame(width: 13, height: 13)
+                    .clipShape(RoundedRectangle(cornerRadius: 3, style: .continuous))
+            }
+
+            metadataText(name)
+        }
+        .accessibilityLabel("Pasted to \(name)")
+    }
+
+    private var insertionTargetIcon: NSImage? {
+        AppIconCache.icon(for: insertionTargetBundleIdentifier)
     }
 
     private func metadataText(_ text: String) -> Text {

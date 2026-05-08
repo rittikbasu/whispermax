@@ -107,6 +107,8 @@ struct TranscriptEntry: Identifiable, Codable, Hashable {
     let createdAt: Date
     let duration: TimeInterval
     let insertionMethod: InsertionMethod
+    let insertionTargetName: String?
+    let insertionTargetBundleIdentifier: String?
     let modelName: String
 }
 
@@ -1214,6 +1216,7 @@ final class AppController {
 
             let insertionMethod = await insertionService.insert(cleanedTranscript, target: pendingInsertionTarget)
             lastTranscript = cleanedTranscript
+            let storesInsertionTarget = insertionMethod != .copied
 
             let entry = TranscriptEntry(
                 id: UUID(),
@@ -1221,6 +1224,8 @@ final class AppController {
                 createdAt: Date(),
                 duration: recordingDuration,
                 insertionMethod: insertionMethod,
+                insertionTargetName: storesInsertionTarget ? pendingInsertionTarget?.displayName : nil,
+                insertionTargetBundleIdentifier: storesInsertionTarget ? pendingInsertionTarget?.bundleIdentifier : nil,
                 modelName: modelDisplayName
             )
 
