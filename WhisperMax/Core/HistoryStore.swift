@@ -1,6 +1,24 @@
 import Foundation
 
+enum HistoryRetentionLimit: Int, CaseIterable, Identifiable {
+    case oneHundred = 100
+    case fiveHundred = 500
+    case oneThousand = 1000
+
+    var id: Int { rawValue }
+
+    var title: String {
+        "\(rawValue)"
+    }
+
+    static let defaultLimit: HistoryRetentionLimit = .oneThousand
+}
+
 final class HistoryStore {
+    private enum DefaultsKey {
+        static let retentionLimit = "HistoryRetentionLimit"
+    }
+
     private let encoder: JSONEncoder = {
         let encoder = JSONEncoder()
         encoder.dateEncodingStrategy = .iso8601
@@ -32,5 +50,22 @@ final class HistoryStore {
         } catch {
             NSLog("Failed to save history: \(error.localizedDescription)")
         }
+    }
+
+    func loadRetentionLimit() -> HistoryRetentionLimit {
+        let rawValue = UserDefaults.standard.integer(forKey: DefaultsKey.retentionLimit)
+        return HistoryRetentionLimit(rawValue: rawValue) ?? .defaultLimit
+    }
+
+    func saveRetentionLimit(_ limit: HistoryRetentionLimit) {
+        UserDefaults.standard.set(limit.rawValue, forKey: DefaultsKey.retentionLimit)
+    }
+
+    func pruned(_ entries: [TranscriptEntry], limit: HistoryRetentionLimit) -> [TranscriptEntry] {
+        Array(
+            entries
+                .sorted { $0.createdAt > $1.createdAt }
+                .prefix(limit.rawValue)
+        )
     }
 }

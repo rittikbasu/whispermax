@@ -359,6 +359,7 @@ final class AppController {
     var statusText: String = "Loading local model..."
     var modelDisplayName: String = "Whisper Large V3 Turbo"
     var modelPath: String = ""
+    var historyRetentionLimit: HistoryRetentionLimit = .defaultLimit
     var hotkeyDisplay: String = "⌥ Space"
     var hotkeyInstructionText: String = "Option + Space"
     var accessibilityGranted = false
@@ -565,7 +566,7 @@ final class AppController {
 
         loadOnboardingState()
         inputPreference = inputPreferenceStore.load()
-        history = historyStore.load().sorted { $0.createdAt > $1.createdAt }
+        loadHistory()
         wordDictionary = wordDictionaryStore.load()
         refreshInputDevices()
         refreshPermissions()
@@ -742,6 +743,31 @@ final class AppController {
 
     func clearHistory() {
         history.removeAll()
+        saveHistory()
+    }
+
+    func setHistoryRetentionLimit(_ limit: HistoryRetentionLimit) {
+        guard historyRetentionLimit != limit else {
+            return
+        }
+
+        historyRetentionLimit = limit
+        historyStore.saveRetentionLimit(limit)
+        saveHistory()
+    }
+
+    private func loadHistory() {
+        historyRetentionLimit = historyStore.loadRetentionLimit()
+        let loadedHistory = historyStore.load()
+        history = historyStore.pruned(loadedHistory, limit: historyRetentionLimit)
+
+        if loadedHistory.count != history.count {
+            historyStore.save(history)
+        }
+    }
+
+    private func saveHistory() {
+        history = historyStore.pruned(history, limit: historyRetentionLimit)
         historyStore.save(history)
     }
 
@@ -799,7 +825,7 @@ final class AppController {
 
     func deleteEntry(_ entry: TranscriptEntry) {
         history.removeAll { $0.id == entry.id }
-        historyStore.save(history)
+        saveHistory()
 
         if let pendingTranscriptDeletion {
             self.pendingTranscriptDeletion = PendingTranscriptDeletion(
@@ -823,7 +849,7 @@ final class AppController {
 
         history.append(contentsOf: pendingTranscriptDeletion.entries)
         history.sort { $0.createdAt > $1.createdAt }
-        historyStore.save(history)
+        saveHistory()
     }
 
     func copy(_ entry: TranscriptEntry) {
@@ -1230,7 +1256,7 @@ final class AppController {
             )
 
             history.insert(entry, at: 0)
-            historyStore.save(history)
+            saveHistory()
 
             switch insertionMethod {
             case .accessibility, .clipboard:

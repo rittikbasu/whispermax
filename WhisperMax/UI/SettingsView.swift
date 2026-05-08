@@ -31,6 +31,7 @@ struct SettingsSection: View {
             TriggerSettingsCard()
             ModelSettingsCard()
             InputSettingsCard()
+            HistorySettingsCard()
             PermissionsSettingsCard()
             AboutSettingsCard()
         }
@@ -389,6 +390,120 @@ private struct PickerRow: View {
         }
         .buttonStyle(.plain)
         .onHover { hovering = $0 }
+    }
+}
+
+// MARK: - History
+
+private struct HistorySettingsCard: View {
+    @Environment(AppController.self) private var controller
+    @State private var pendingRetentionChange: PendingHistoryRetentionChange?
+    @State private var showsRetentionWarning = false
+
+    var body: some View {
+        SettingsCard(title: "HISTORY") {
+            VStack(alignment: .leading, spacing: 14) {
+                HStack(alignment: .center, spacing: 18) {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("Keep latest")
+                            .font(.system(size: 15, weight: .semibold))
+                            .foregroundStyle(SettingsTheme.primaryText)
+
+                        Text("When the limit is reached, the oldest transcripts are removed automatically.")
+                            .font(.system(size: 12.5, weight: .regular))
+                            .foregroundStyle(SettingsTheme.secondaryText)
+                    }
+
+                    Spacer(minLength: 16)
+
+                    HistoryRetentionPicker(
+                        selection: controller.historyRetentionLimit,
+                        action: handleRetentionSelection
+                    )
+                }
+            }
+        }
+        .alert(
+            "Delete older transcripts?",
+            isPresented: $showsRetentionWarning,
+            presenting: pendingRetentionChange
+        ) { change in
+            Button("Cancel", role: .cancel) {
+                pendingRetentionChange = nil
+            }
+
+            Button("Delete Older", role: .destructive) {
+                controller.setHistoryRetentionLimit(change.limit)
+                pendingRetentionChange = nil
+            }
+        } message: { change in
+            Text(change.message)
+        }
+    }
+
+    private func handleRetentionSelection(_ limit: HistoryRetentionLimit) {
+        guard limit != controller.historyRetentionLimit else {
+            return
+        }
+
+        let deletedCount = max(0, controller.history.count - limit.rawValue)
+        guard deletedCount > 0 else {
+            controller.setHistoryRetentionLimit(limit)
+            return
+        }
+
+        pendingRetentionChange = PendingHistoryRetentionChange(
+            limit: limit,
+            deletedCount: deletedCount
+        )
+        showsRetentionWarning = true
+    }
+}
+
+private struct PendingHistoryRetentionChange: Identifiable {
+    let id = UUID()
+    let limit: HistoryRetentionLimit
+    let deletedCount: Int
+
+    var message: String {
+        let noun = deletedCount == 1 ? "transcript" : "transcripts"
+        return "This will keep the latest \(limit.rawValue) and delete \(deletedCount) older \(noun)."
+    }
+}
+
+private struct HistoryRetentionPicker: View {
+    let selection: HistoryRetentionLimit
+    let action: (HistoryRetentionLimit) -> Void
+
+    var body: some View {
+        HStack(spacing: 3) {
+            ForEach(HistoryRetentionLimit.allCases) { limit in
+                Button {
+                    action(limit)
+                } label: {
+                    Text(limit.title)
+                        .font(.system(size: 12, weight: .semibold))
+                        .monospacedDigit()
+                        .foregroundStyle(limit == selection ? .white.opacity(0.94) : .white.opacity(0.46))
+                        .frame(minWidth: 42)
+                        .frame(height: 28)
+                        .background(
+                            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                                .fill(limit == selection ? Color.white.opacity(0.095) : .clear)
+                        )
+                }
+                .buttonStyle(.plain)
+            }
+        }
+        .padding(3)
+        .background(
+            RoundedRectangle(cornerRadius: 11, style: .continuous)
+                .fill(Color.white.opacity(0.040))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 11, style: .continuous)
+                        .stroke(Color.white.opacity(0.070), lineWidth: 1)
+                )
+        )
     }
 }
 
