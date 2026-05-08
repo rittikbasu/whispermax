@@ -7,6 +7,8 @@ struct InsertionTargetContext {
     let bundleIdentifier: String?
     let processIdentifier: pid_t
     let bundleURL: URL?
+    let displayName: String?
+    let icon: NSImage?
 }
 
 private enum InsertionSurfaceKind {
@@ -26,38 +28,29 @@ private enum InsertionSurfaceKind {
     }
 }
 
-private enum InsertionStrategy {
-    case accessibilityFirst
-    case pasteFirst
-}
-
 private struct FocusedElementSnapshot {
     let role: String?
     let subrole: String?
-    let value: String?
-    let selectedText: String?
-    let selectedRange: CFRange?
     let editable: Bool
     let webContent: Bool
 }
 
 private struct PasteDispatchOutcome {
     let dispatched: Bool
-    let confirmed: Bool
+    let focusedTextTarget: Bool
 }
 
-private struct AccessibilityInsertOutcome {
-    let applied: Bool
-    let confirmed: Bool
+private struct AccessibilityTreeProbeKey: Hashable {
+    let bundleIdentifier: String
+    let processIdentifier: pid_t
 }
 
 @MainActor
 final class TextInsertionService {
-    private let pasteFirstBundlePrefixes: [String] = [
+    private let browserBundlePrefixes: [String] = [
         "com.apple.Safari",
         "company.thebrowser.",
         "com.google.Chrome",
-        "com.openai.codex",
         "org.chromium.",
         "org.mozilla.firefox",
         "com.brave.Browser",
@@ -65,17 +58,16 @@ final class TextInsertionService {
         "com.operasoftware.",
         "com.vivaldi.",
     ]
+    private let pasteFirstBundlePrefixes: [String] = [
+        "com.openai.codex",
+    ]
     private let webRuntimeFrameworkNames = [
         "Electron Framework.framework",
         "Chromium Embedded Framework.framework",
         "QtWebEngineCore.framework",
     ]
-    private let insertionPolicyStore = InsertionPolicyStore()
-    private var learnedStrategies: [String: LearnedInsertionStrategy]
-
-    init() {
-        learnedStrategies = insertionPolicyStore.load()
-    }
+    private var accessibilityTreeEnabledTargets = Set<AccessibilityTreeProbeKey>()
+    private var accessibilityTreeUnsupportedTargets = Set<AccessibilityTreeProbeKey>()
 
     func captureTargetContext() -> InsertionTargetContext? {
         guard let app = NSWorkspace.shared.frontmostApplication else {
@@ -85,7 +77,9 @@ final class TextInsertionService {
         return InsertionTargetContext(
             bundleIdentifier: app.bundleIdentifier,
             processIdentifier: app.processIdentifier,
-            bundleURL: app.bundleURL
+            bundleURL: app.bundleURL,
+            displayName: app.localizedName ?? app.bundleURL?.deletingPathExtension().lastPathComponent,
+            icon: app.icon
         )
     }
 
@@ -97,150 +91,50 @@ final class TextInsertionService {
             resolvedTarget,
             prefersWebFocusRestore: browserTarget || webRuntimeTarget
         )
-        let focusSnapshot = targetPrepared ? captureFocusedElementSnapshot() : nil
+        var focusSnapshot = targetPrepared ? captureFocusedElementSnapshot() : nil
+        if targetPrepared,
+           webRuntimeTarget,
+           !focusSnapshotLooksLikeTextInsertionTarget(focusSnapshot) {
+            if await enableExpandedAccessibilityTreeIfAvailable(for: resolvedTarget) {
+                focusSnapshot = captureFocusedElementSnapshot()
+            }
+        }
         let surface = surfaceKind(
-            target: resolvedTarget,
             browserTarget: browserTarget,
             webRuntimeTarget: webRuntimeTarget,
             snapshot: focusSnapshot
         )
-        let preferredStrategy = preferredStrategy(for: resolvedTarget, surface: surface)
 
-        switch preferredStrategy {
-        case .pasteFirst:
-            return await insertViaPastePreferredPath(
-                text,
-                target: resolvedTarget,
-                targetPrepared: targetPrepared,
-                surface: surface,
-                referenceSnapshot: focusSnapshot
-            )
-        case .accessibilityFirst:
-            return await insertViaAccessibilityPreferredPath(
-                text,
-                target: resolvedTarget,
-                targetPrepared: targetPrepared,
-                surface: surface,
-                referenceSnapshot: focusSnapshot
-            )
-        }
-    }
-
-    private func insertViaPastePreferredPath(
-        _ text: String,
-        target: InsertionTargetContext?,
-        targetPrepared: Bool,
-        surface: InsertionSurfaceKind,
-        referenceSnapshot: FocusedElementSnapshot?
-    ) async -> InsertionMethod {
-        let pasteOutcome = await pasteViaClipboard(
-            text,
-            targetPrepared: targetPrepared,
-            referenceSnapshot: referenceSnapshot,
-            settleDelayMilliseconds: surface.prefersPasteFirst ? 130 : 90
-        )
-
-        if pasteOutcome.dispatched {
-            learn(.pasteFirst, for: target, surface: surface, confirmed: pasteOutcome.confirmed)
-            let likelyPasteTarget = targetPrepared
-                ? likelyPasteTargetExists(for: target, referenceSnapshot: referenceSnapshot)
-                : false
-            let finalMethod: InsertionMethod = pasteOutcome.confirmed || likelyPasteTarget ? .clipboard : .copied
-            return finalMethod
-        }
-
-        return .copied
-    }
-
-    private func insertViaAccessibilityPreferredPath(
-        _ text: String,
-        target: InsertionTargetContext?,
-        targetPrepared: Bool,
-        surface: InsertionSurfaceKind,
-        referenceSnapshot: FocusedElementSnapshot?
-    ) async -> InsertionMethod {
-        if shouldTryAccessibility(for: target, surface: surface) {
-            let accessibilityOutcome = await tryInsertViaAccessibility(text, referenceSnapshot: referenceSnapshot)
-            if accessibilityOutcome.applied {
-                learn(.accessibilityFirst, for: target, surface: surface, confirmed: accessibilityOutcome.confirmed)
+        if shouldTryAccessibility(for: resolvedTarget, surface: surface) {
+            if await tryInsertViaAccessibility(text) {
                 return .accessibility
             }
         }
 
-        guard referenceSnapshot?.editable == true else {
-            copyToClipboard(text)
-            return .copied
-        }
-
         let pasteOutcome = await pasteViaClipboard(
             text,
             targetPrepared: targetPrepared,
-            referenceSnapshot: referenceSnapshot,
-            settleDelayMilliseconds: 90
+            referenceSnapshot: focusSnapshot,
+            settleDelayMilliseconds: surface.prefersPasteFirst ? 130 : 90
         )
 
         if pasteOutcome.dispatched {
-            learn(.pasteFirst, for: target, surface: surface, confirmed: pasteOutcome.confirmed)
-            let likelyPasteTarget = targetPrepared
-                ? likelyPasteTargetExists(for: target, referenceSnapshot: referenceSnapshot)
-                : false
-            let finalMethod: InsertionMethod = pasteOutcome.confirmed || likelyPasteTarget ? .clipboard : .copied
-            return finalMethod
+            return pasteOutcome.focusedTextTarget ? .clipboard : .copied
         }
 
         return .copied
     }
 
-    private func preferredStrategy(
-        for target: InsertionTargetContext?,
-        surface: InsertionSurfaceKind
-    ) -> InsertionStrategy {
-        if let bundleIdentifier = target?.bundleIdentifier,
-           let learned = learnedStrategies[bundleIdentifier] {
-            switch learned {
-            case .pasteFirst:
-                return .pasteFirst
-            case .accessibilityFirst:
-                if surface.prefersPasteFirst {
-                    return .pasteFirst
-                }
-
-                return .accessibilityFirst
-            }
-        }
-
-        return surface.prefersPasteFirst ? .pasteFirst : .accessibilityFirst
-    }
-
-    private func learn(
-        _ strategy: LearnedInsertionStrategy,
-        for target: InsertionTargetContext?,
-        surface: InsertionSurfaceKind,
-        confirmed: Bool
-    ) {
-        guard confirmed, let bundleIdentifier = target?.bundleIdentifier else {
-            return
-        }
-
-        if learnedStrategies[bundleIdentifier] == strategy {
-            return
-        }
-
-        learnedStrategies[bundleIdentifier] = strategy
-        insertionPolicyStore.save(learnedStrategies)
-    }
-
     private func tryInsertViaAccessibility(
-        _ text: String,
-        referenceSnapshot: FocusedElementSnapshot?
-    ) async -> AccessibilityInsertOutcome {
+        _ text: String
+    ) async -> Bool {
         let options = ["AXTrustedCheckOptionPrompt": false] as CFDictionary
         guard AXIsProcessTrusted() || AXIsProcessTrustedWithOptions(options) else {
-            return AccessibilityInsertOutcome(applied: false, confirmed: false)
+            return false
         }
 
         guard let focusedElement = focusedElement() else {
-            return AccessibilityInsertOutcome(applied: false, confirmed: false)
+            return false
         }
 
         var selectedTextSettable = DarwinBoolean(false)
@@ -250,24 +144,14 @@ final class TextInsertionService {
             &selectedTextSettable
         ) == .success,
               selectedTextSettable.boolValue else {
-            return AccessibilityInsertOutcome(applied: false, confirmed: false)
+            return false
         }
 
-        let applied = AXUIElementSetAttributeValue(
+        return AXUIElementSetAttributeValue(
             focusedElement,
             kAXSelectedTextAttribute as CFString,
             text as CFTypeRef
         ) == .success
-
-        let confirmed = applied
-            ? await verifyInsertionApplied(
-                expectedText: text,
-                referenceSnapshot: referenceSnapshot,
-                confirmationWindowMilliseconds: 220
-            )
-            : false
-
-        return AccessibilityInsertOutcome(applied: applied, confirmed: confirmed)
     }
 
     private func shouldTryAccessibility(
@@ -288,124 +172,20 @@ final class TextInsertionService {
         referenceSnapshot: FocusedElementSnapshot?,
         settleDelayMilliseconds: UInt64 = 90
     ) async -> PasteDispatchOutcome {
-        let pasteboard = NSPasteboard.general
-        pasteboard.clearContents()
-        pasteboard.setString(text, forType: .string)
+        copyToClipboard(text)
+        let focusedTextTarget = focusSnapshotLooksLikeTextInsertionTarget(referenceSnapshot)
 
         guard targetPrepared else {
-            return PasteDispatchOutcome(
-                dispatched: false,
-                confirmed: false
-            )
+            return PasteDispatchOutcome(dispatched: false, focusedTextTarget: false)
         }
 
         try? await Task.sleep(for: .milliseconds(settleDelayMilliseconds))
 
         guard sendCommandV() else {
-            return PasteDispatchOutcome(
-                dispatched: false,
-                confirmed: false
-            )
+            return PasteDispatchOutcome(dispatched: false, focusedTextTarget: false)
         }
 
-        let confirmed = await verifyInsertionApplied(
-            expectedText: text,
-            referenceSnapshot: referenceSnapshot,
-            confirmationWindowMilliseconds: 280
-        )
-
-        return PasteDispatchOutcome(
-            dispatched: true,
-            confirmed: confirmed
-        )
-    }
-
-    private func verifyInsertionApplied(
-        expectedText: String,
-        referenceSnapshot: FocusedElementSnapshot?,
-        confirmationWindowMilliseconds: UInt64
-    ) async -> Bool {
-        let pollingStep: UInt64 = 55
-        let attempts = max(1, Int(confirmationWindowMilliseconds / pollingStep))
-
-        for attempt in 0..<attempts {
-            if attempt > 0 {
-                try? await Task.sleep(for: .milliseconds(pollingStep))
-            }
-
-            guard let currentSnapshot = captureFocusedElementSnapshot() else {
-                continue
-            }
-
-            if insertionAppearsApplied(
-                before: referenceSnapshot,
-                after: currentSnapshot,
-                expectedText: expectedText
-            ) {
-                return true
-            }
-        }
-
-        return false
-    }
-
-    private func insertionAppearsApplied(
-        before: FocusedElementSnapshot?,
-        after: FocusedElementSnapshot,
-        expectedText: String
-    ) -> Bool {
-        if containsInsertedText(after.selectedText, expectedText: expectedText) {
-            return true
-        }
-
-        if let afterValue = after.value {
-            if containsInsertedText(afterValue, expectedText: expectedText) {
-                if let beforeValue = before?.value {
-                    return beforeValue != afterValue || !containsInsertedText(beforeValue, expectedText: expectedText)
-                }
-
-                return true
-            }
-        }
-
-        if let beforeValue = before?.value,
-           let afterValue = after.value,
-           beforeValue != afterValue,
-           after.editable {
-            return true
-        }
-
-        if let beforeSelectedText = before?.selectedText,
-           let afterSelectedText = after.selectedText,
-           beforeSelectedText != afterSelectedText,
-           after.editable {
-            return true
-        }
-
-        if let beforeRange = before?.selectedRange,
-           let afterRange = after.selectedRange,
-           after.editable,
-           (beforeRange.location != afterRange.location || beforeRange.length != afterRange.length) {
-            return true
-        }
-
-        return false
-    }
-
-    private func containsInsertedText(_ haystack: String?, expectedText: String) -> Bool {
-        guard let haystack, !expectedText.isEmpty else {
-            return false
-        }
-
-        return haystack.localizedCaseInsensitiveContains(expectedText)
-    }
-
-    private func likelyPasteTargetExists(
-        for target: InsertionTargetContext?,
-        referenceSnapshot: FocusedElementSnapshot?
-    ) -> Bool {
-        _ = target
-        return focusSnapshotLooksLikeTextInsertionTarget(referenceSnapshot)
+        return PasteDispatchOutcome(dispatched: true, focusedTextTarget: focusedTextTarget)
     }
 
     private func focusSnapshotLooksLikeTextInsertionTarget(_ snapshot: FocusedElementSnapshot?) -> Bool {
@@ -469,8 +249,50 @@ final class TextInsertionService {
         return NSWorkspace.shared.frontmostApplication?.processIdentifier == target.processIdentifier
     }
 
+    private func enableExpandedAccessibilityTreeIfAvailable(
+        for target: InsertionTargetContext?
+    ) async -> Bool {
+        guard AXIsProcessTrusted() else {
+            return false
+        }
+
+        guard let target,
+              let bundleIdentifier = target.bundleIdentifier else {
+            return false
+        }
+
+        let key = AccessibilityTreeProbeKey(
+            bundleIdentifier: bundleIdentifier,
+            processIdentifier: target.processIdentifier
+        )
+
+        guard !accessibilityTreeUnsupportedTargets.contains(key) else {
+            return false
+        }
+
+        if accessibilityTreeEnabledTargets.contains(key) {
+            return true
+        }
+
+        // Electron and Chromium apps often hide their real focused editor until this flag is set.
+        let appElement = AXUIElementCreateApplication(target.processIdentifier)
+        let result = AXUIElementSetAttributeValue(
+            appElement,
+            "AXManualAccessibility" as CFString,
+            kCFBooleanTrue
+        )
+
+        guard result == .success else {
+            accessibilityTreeUnsupportedTargets.insert(key)
+            return false
+        }
+
+        accessibilityTreeEnabledTargets.insert(key)
+        try? await Task.sleep(for: .milliseconds(100))
+        return true
+    }
+
     private func surfaceKind(
-        target: InsertionTargetContext?,
         browserTarget: Bool,
         webRuntimeTarget: Bool,
         snapshot: FocusedElementSnapshot?
@@ -499,6 +321,8 @@ final class TextInsertionService {
             return nil
         }
 
+        let role = stringValue(for: kAXRoleAttribute as CFString, on: focusedElement)
+        let subrole = stringValue(for: kAXSubroleAttribute as CFString, on: focusedElement)
         let webContent = focusedElementAppearsWebContent(focusedElement)
         let editable = webContent
             ? focusedElementAppearsEditableWebContent(focusedElement)
@@ -506,35 +330,21 @@ final class TextInsertionService {
                 isAttributeSettable(kAXSelectedTextAttribute as CFString, on: focusedElement)
                     || isAttributeSettable(kAXValueAttribute as CFString, on: focusedElement)
                     || isAttributeSettable(kAXSelectedTextRangeAttribute as CFString, on: focusedElement)
-                    || focusedElementHasEditableRole(focusedElement)
+                    || explicitTextInputRole(role)
+                    || explicitTextInputRole(subrole)
             )
 
         return FocusedElementSnapshot(
-            role: stringValue(for: kAXRoleAttribute as CFString, on: focusedElement),
-            subrole: stringValue(for: kAXSubroleAttribute as CFString, on: focusedElement),
-            value: stringValue(for: kAXValueAttribute as CFString, on: focusedElement, maxLength: 4096),
-            selectedText: stringValue(for: kAXSelectedTextAttribute as CFString, on: focusedElement, maxLength: 1024),
-            selectedRange: selectedTextRange(on: focusedElement),
+            role: role,
+            subrole: subrole,
             editable: editable,
             webContent: webContent
         )
     }
 
-    private func focusedElementHasEditableRole(_ focusedElement: AXUIElement) -> Bool {
-        guard let role = stringValue(for: kAXRoleAttribute as CFString, on: focusedElement) else {
-            return false
-        }
-
-        return [
-            kAXTextFieldRole as String,
-            kAXTextAreaRole as String,
-            "AXSearchField",
-            kAXComboBoxRole as String,
-        ].contains(role)
-    }
-
     private func prefersPasteFirst(for bundleIdentifier: String) -> Bool {
-        pasteFirstBundlePrefixes.contains { bundleIdentifier.hasPrefix($0) }
+        browserBundlePrefixes.contains { bundleIdentifier.hasPrefix($0) }
+            || pasteFirstBundlePrefixes.contains { bundleIdentifier.hasPrefix($0) }
     }
 
     private func isBrowserTarget(_ target: InsertionTargetContext?) -> Bool {
@@ -542,7 +352,7 @@ final class TextInsertionService {
             return false
         }
 
-        return prefersPasteFirst(for: bundleIdentifier)
+        return browserBundlePrefixes.contains { bundleIdentifier.hasPrefix($0) }
     }
 
     private func isWebRuntimeTarget(_ target: InsertionTargetContext?) -> Bool {
@@ -639,27 +449,6 @@ final class TextInsertionService {
         return AXUIElementIsAttributeSettable(element, attribute, &settable) == .success && settable.boolValue
     }
 
-    private func selectedTextRange(on element: AXUIElement) -> CFRange? {
-        var value: CFTypeRef?
-        guard AXUIElementCopyAttributeValue(element, kAXSelectedTextRangeAttribute as CFString, &value) == .success,
-              let value,
-              CFGetTypeID(value) == AXValueGetTypeID() else {
-            return nil
-        }
-
-        let axValue = unsafeDowncast(value, to: AXValue.self)
-        guard AXValueGetType(axValue) == .cfRange else {
-            return nil
-        }
-
-        var range = CFRange()
-        guard AXValueGetValue(axValue, .cfRange, &range) else {
-            return nil
-        }
-
-        return range
-    }
-
     private func stringValue(for attribute: CFString, on element: AXUIElement, maxLength: Int? = nil) -> String? {
         var value: CFTypeRef?
         guard AXUIElementCopyAttributeValue(element, attribute, &value) == .success else {
@@ -675,27 +464,6 @@ final class TextInsertionService {
         }
 
         return string
-    }
-
-    private func axChildren(of element: AXUIElement) -> [AXUIElement] {
-        axElementsValue(for: kAXChildrenAttribute as CFString, on: element)
-    }
-
-    private func axElementsValue(for attribute: CFString, on element: AXUIElement) -> [AXUIElement] {
-        var value: CFTypeRef?
-        guard AXUIElementCopyAttributeValue(element, attribute, &value) == .success,
-              let array = value as? [Any] else {
-            return []
-        }
-
-        return array.compactMap { candidate in
-            let candidateRef = candidate as CFTypeRef
-            guard CFGetTypeID(candidateRef) == AXUIElementGetTypeID() else {
-                return nil
-            }
-
-            return unsafeDowncast(candidateRef, to: AXUIElement.self)
-        }
     }
 
     private func axElementValue(for attribute: CFString, on element: AXUIElement) -> AXUIElement? {

@@ -367,6 +367,8 @@ final class AppController {
     var pendingTranscriptDeletion: PendingTranscriptDeletion?
     var canCheckForUpdates = false
     var availableUpdate: AvailableAppUpdate?
+    var insertionTargetName: String?
+    var insertionTargetIcon: NSImage?
 
     init(updateController: AppUpdateController = AppUpdateController()) {
         self.updateController = updateController
@@ -541,10 +543,8 @@ final class AppController {
             return "Transcribing locally…"
         case .inserted(let method):
             switch method {
-            case .accessibility:
-                return "Inserted into your app"
-            case .clipboard:
-                return "Pasted into your app"
+            case .accessibility, .clipboard:
+                return insertionStatusText(verb: "Pasted", target: pendingInsertionTarget)
             case .copied:
                 return "Copied to clipboard"
             }
@@ -1228,10 +1228,8 @@ final class AppController {
             historyStore.save(history)
 
             switch insertionMethod {
-            case .accessibility:
-                statusText = "Inserted directly."
-            case .clipboard:
-                statusText = "Pasted into your app."
+            case .accessibility, .clipboard:
+                statusText = insertionStatusText(verb: "Pasted", target: pendingInsertionTarget)
             case .copied:
                 statusText = "Copied to clipboard."
             }
@@ -1246,6 +1244,8 @@ final class AppController {
                 chunks: preparedAudio.debugChunkPlans,
                 transcriptionPasses: transcriptionPasses
             )
+            insertionTargetName = insertionMethod == .copied ? nil : pendingInsertionTarget?.displayName
+            insertionTargetIcon = insertionMethod == .copied ? nil : pendingInsertionTarget?.icon
             phase = .inserted(insertionMethod)
             transitionToReady(after: 0.9)
         } catch {
@@ -1446,9 +1446,19 @@ final class AppController {
             guard self.phase != .recording, self.phase != .transcribing else { return }
             self.phase = self.whisperEngine == nil ? .loadingModel : .ready
             self.statusText = self.idleStatusText
+            self.insertionTargetName = nil
+            self.insertionTargetIcon = nil
             self.recordingDuration = 0
             self.resetWaveform(active: false)
         }
+    }
+
+    private func insertionStatusText(verb: String, target: InsertionTargetContext?) -> String {
+        guard let displayName = target?.displayName, !displayName.isEmpty else {
+            return "\(verb) into your app."
+        }
+
+        return "\(verb) into \(displayName)."
     }
 
     private var idleStatusText: String {

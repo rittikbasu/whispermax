@@ -68,6 +68,8 @@ struct RecorderPanelView: View {
 
                     RecorderControlRail(
                         phase: controller.phase,
+                        insertionTargetName: controller.insertionTargetName,
+                        insertionTargetIcon: controller.insertionTargetIcon,
                         duration: controller.formattedDuration,
                         hotkeyText: controller.hotkeyDisplay,
                         height: railHeight,
@@ -124,6 +126,8 @@ private struct RecorderWaveStage: View {
 
 private struct RecorderControlRail: View {
     let phase: RecordingPhase
+    let insertionTargetName: String?
+    let insertionTargetIcon: NSImage?
     let duration: String
     let hotkeyText: String
     let height: CGFloat
@@ -165,7 +169,11 @@ private struct RecorderControlRail: View {
         case .transcribing:
             RecorderStateLabel(title: "Transcribing")
         case .inserted(let method):
-            RecorderStateLabel(title: insertedTitle(for: method))
+            RecorderInsertionLabel(
+                title: insertedTitle(for: method),
+                targetName: insertionTargetName(for: method),
+                targetIcon: insertionTargetIcon(for: method)
+            )
         case .error(let issue):
             RecorderStateLabel(title: issue.title, subtitle: issue.subtitle)
         case .loadingModel:
@@ -205,13 +213,25 @@ private struct RecorderControlRail: View {
 
     private func insertedTitle(for method: InsertionMethod) -> String {
         switch method {
-        case .accessibility:
-            return "Inserted"
-        case .clipboard:
+        case .accessibility, .clipboard:
             return "Pasted"
         case .copied:
             return "Copied to Clipboard"
         }
+    }
+
+    private func insertionTargetName(for method: InsertionMethod) -> String? {
+        guard method != .copied,
+              let insertionTargetName,
+              !insertionTargetName.isEmpty else {
+            return nil
+        }
+
+        return insertionTargetName
+    }
+
+    private func insertionTargetIcon(for method: InsertionMethod) -> NSImage? {
+        method == .copied ? nil : insertionTargetIcon
     }
 }
 
@@ -301,6 +321,44 @@ private struct RecorderStateLabel: View {
                     .foregroundStyle(RecorderTheme.mutedText)
             }
         }
+    }
+}
+
+private struct RecorderInsertionLabel: View {
+    let title: String
+    let targetName: String?
+    let targetIcon: NSImage?
+
+    var body: some View {
+        HStack(spacing: 6) {
+            Text(title)
+                .font(.system(size: 16, weight: .semibold))
+                .foregroundStyle(.white.opacity(0.94))
+                .lineLimit(1)
+
+            if let targetName {
+                Text("to")
+                    .font(.system(size: 15, weight: .semibold))
+                    .foregroundStyle(RecorderTheme.mutedText)
+                    .lineLimit(1)
+
+                if let targetIcon {
+                    Image(nsImage: targetIcon)
+                        .resizable()
+                        .interpolation(.high)
+                        .frame(width: 14, height: 14)
+                        .clipShape(RoundedRectangle(cornerRadius: 3, style: .continuous))
+                }
+
+                Text(targetName)
+                    .font(.system(size: 15, weight: .semibold))
+                    .foregroundStyle(.white.opacity(0.72))
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .accessibilityElement(children: .combine)
     }
 }
 
