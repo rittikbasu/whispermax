@@ -2,17 +2,17 @@
   "images" : [
     {
       "filename" : "whispermax-menubar@1x.png",
-      "idiom" : "mac",
+      "idiom" : "universal",
       "scale" : "1x"
     },
     {
       "filename" : "whispermax-menubar@2x.png",
-      "idiom" : "mac",
+      "idiom" : "universal",
       "scale" : "2x"
     },
     {
       "filename" : "whispermax-menubar@3x.png",
-      "idiom" : "mac",
+      "idiom" : "universal",
       "scale" : "3x"
     }
   ],

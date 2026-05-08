@@ -238,7 +238,7 @@ private struct DownloadCard: View {
                         .renderingMode(.template)
                         .interpolation(.high)
                         .aspectRatio(contentMode: .fit)
-                        .frame(width: 36, height: 22)
+                        .frame(width: 34, height: 34)
                         .foregroundStyle(.white.opacity(0.50))
 
                     StyledAppName(size: 14)

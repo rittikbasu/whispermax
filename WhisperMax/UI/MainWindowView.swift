@@ -157,7 +157,7 @@ private struct AppGlyph: View {
             .renderingMode(.template)
             .interpolation(.high)
             .aspectRatio(contentMode: .fit)
-            .frame(width: 46, height: 28)
+            .frame(width: 38, height: 38)
             .foregroundStyle(.white.opacity(0.96))
     }
 }
