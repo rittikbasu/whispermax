@@ -41,10 +41,15 @@ private enum Layout {
 @MainActor
 private enum AppIconCache {
     private static let icons = NSCache<NSString, NSImage>()
+    private static let ownAppIconCacheKey = "__own_app_inline_icon" as NSString
 
     static func icon(for bundleIdentifier: String?) -> NSImage? {
         guard let bundleIdentifier else {
             return nil
+        }
+
+        if bundleIdentifier == Bundle.main.bundleIdentifier {
+            return ownAppInlineIcon()
         }
 
         let cacheKey = bundleIdentifier as NSString
@@ -58,6 +63,31 @@ private enum AppIconCache {
 
         let icon = NSWorkspace.shared.icon(forFile: appURL.path)
         icons.setObject(icon, forKey: cacheKey)
+        return icon
+    }
+
+    private static func ownAppInlineIcon() -> NSImage? {
+        if let cachedIcon = icons.object(forKey: ownAppIconCacheKey) {
+            return cachedIcon
+        }
+
+        guard let icon = bundledOwnAppIcon() ?? NSApplication.shared.applicationIconImage else {
+            return nil
+        }
+
+        icon.isTemplate = false
+        icons.setObject(icon, forKey: ownAppIconCacheKey)
+        return icon
+    }
+
+    private static func bundledOwnAppIcon() -> NSImage? {
+        guard let iconURL = Bundle.main.url(forResource: "AppIcon", withExtension: "icns"),
+              let icon = NSImage(contentsOf: iconURL)
+        else {
+            return nil
+        }
+
+        icon.size = NSSize(width: 16, height: 16)
         return icon
     }
 }
@@ -822,8 +852,13 @@ private struct HistoryRowMetadata: View {
                 Image(nsImage: icon)
                     .resizable()
                     .interpolation(.high)
-                    .frame(width: 13, height: 13)
-                    .clipShape(RoundedRectangle(cornerRadius: 3, style: .continuous))
+                    .frame(width: insertionTargetIconSize, height: insertionTargetIconSize)
+                    .overlay {
+                        if isOwnInsertionTarget {
+                            RoundedRectangle(cornerRadius: 3.5, style: .continuous)
+                                .stroke(Color.white.opacity(0.12), lineWidth: 0.5)
+                        }
+                    }
             }
 
             metadataText(name)
@@ -831,8 +866,16 @@ private struct HistoryRowMetadata: View {
         .accessibilityLabel("Pasted to \(name)")
     }
 
+    private var insertionTargetIconSize: CGFloat {
+        isOwnInsertionTarget ? 15 : 13
+    }
+
     private var insertionTargetIcon: NSImage? {
         AppIconCache.icon(for: insertionTargetBundleIdentifier)
+    }
+
+    private var isOwnInsertionTarget: Bool {
+        insertionTargetBundleIdentifier == Bundle.main.bundleIdentifier
     }
 
     private func metadataText(_ text: String) -> Text {
