@@ -3,6 +3,13 @@ import ApplicationServices
 import Foundation
 import AppKit
 
+enum MicrophonePermissionState: Equatable {
+    case notDetermined
+    case authorized
+    case needsSettings
+    case unavailable
+}
+
 @MainActor
 final class PermissionsManager {
     var isAccessibilityGranted: Bool {
@@ -14,8 +21,21 @@ final class PermissionsManager {
         AVCaptureDevice.authorizationStatus(for: .audio)
     }
 
+    var microphonePermissionState: MicrophonePermissionState {
+        switch microphoneAuthorizationStatus {
+        case .notDetermined:
+            return .notDetermined
+        case .authorized:
+            return .authorized
+        case .denied, .restricted:
+            return .needsSettings
+        @unknown default:
+            return .unavailable
+        }
+    }
+
     var isMicrophoneGranted: Bool {
-        microphoneAuthorizationStatus == .authorized
+        microphonePermissionState == .authorized
     }
 
     func promptForAccessibility() {
@@ -40,10 +60,10 @@ final class PermissionsManager {
     }
 
     func requestMicrophoneAccess() async -> Bool {
-        switch microphoneAuthorizationStatus {
+        switch microphonePermissionState {
         case .authorized:
             return true
-        case .denied, .restricted:
+        case .needsSettings, .unavailable:
             return false
         case .notDetermined:
             return await withCheckedContinuation { continuation in
@@ -51,8 +71,6 @@ final class PermissionsManager {
                     continuation.resume(returning: granted)
                 }
             }
-        @unknown default:
-            return false
         }
     }
 }

@@ -370,6 +370,17 @@ private struct PermissionsCard: View {
     private var micGranted: Bool { controller.microphoneGranted }
     private var accessGranted: Bool { controller.accessibilityGranted }
     private var canContinue: Bool { micGranted }
+    private var micNeedsSettings: Bool { controller.microphonePermissionState == .needsSettings }
+    private var micSubtitle: String {
+        if micGranted {
+            return "Granted"
+        }
+
+        return micNeedsSettings ? "Turn it on in System Settings." : "Required to capture your voice."
+    }
+    private var micButtonTitle: String {
+        micNeedsSettings ? "Open Settings" : "Grant Access"
+    }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -394,14 +405,10 @@ private struct PermissionsCard: View {
                 PermissionCard(
                     icon: "mic.fill",
                     title: "Microphone",
-                    subtitle: micGranted ? "Granted" : "Required to capture your voice.",
+                    subtitle: micSubtitle,
                     isGranted: micGranted,
-                    buttonTitle: "Grant Access",
-                    action: {
-                        Task {
-                            controller.microphoneGranted = await controller.permissionsManager.requestMicrophoneAccess()
-                        }
-                    }
+                    buttonTitle: micButtonTitle,
+                    action: controller.beginMicrophonePermissionFlow
                 )
                 .opacity(micCardVisible ? 1 : 0)
                 .offset(y: micCardVisible ? 0 : 10)

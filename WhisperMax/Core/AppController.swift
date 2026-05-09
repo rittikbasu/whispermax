@@ -375,6 +375,7 @@ final class AppController {
     var hotkeyInstructionText: String = "Option + Space"
     var accessibilityGranted = false
     var microphoneGranted = false
+    var microphonePermissionState: MicrophonePermissionState = .notDetermined
     var defaultInputDeviceID: AudioObjectID = kAudioObjectUnknown
     var inputPreference: AudioInputPreference = .systemDefault
     var menuFeedbackMessage: String?
@@ -660,6 +661,23 @@ final class AppController {
 
     func openMicrophoneSettings() {
         permissionsManager.openMicrophoneSettings()
+    }
+
+    func beginMicrophonePermissionFlow() {
+        boostPermissionMonitoring(for: 10)
+
+        Task {
+            switch permissionsManager.microphonePermissionState {
+            case .authorized:
+                microphoneGranted = true
+            case .notDetermined:
+                microphoneGranted = await permissionsManager.requestMicrophoneAccess()
+            case .needsSettings, .unavailable:
+                openMicrophoneSettings()
+            }
+
+            refreshPermissions()
+        }
     }
 
     func checkForUpdates() {
@@ -1514,6 +1532,7 @@ final class AppController {
     }
 
     private func syncPermissionState() {
+        microphonePermissionState = permissionsManager.microphonePermissionState
         accessibilityGranted = permissionsManager.isAccessibilityGranted
         microphoneGranted = permissionsManager.isMicrophoneGranted
 
