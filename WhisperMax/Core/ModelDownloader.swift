@@ -14,6 +14,12 @@ final class ModelDownloader: NSObject, @unchecked Sendable {
     private var retryTask: DispatchWorkItem?
     private var retryCount = 0
     private let maximumRetryCount = 3
+    private let delegateQueue: OperationQueue = {
+        let queue = OperationQueue()
+        queue.name = "com.whispermax.model-downloader"
+        queue.maxConcurrentOperationCount = 1
+        return queue
+    }()
 
     func start() {
         let config = URLSessionConfiguration.default
@@ -23,7 +29,7 @@ final class ModelDownloader: NSObject, @unchecked Sendable {
         config.allowsExpensiveNetworkAccess = true
         config.allowsConstrainedNetworkAccess = true
 
-        session = URLSession(configuration: config, delegate: self, delegateQueue: .main)
+        session = URLSession(configuration: config, delegate: self, delegateQueue: delegateQueue)
         startDownloadTask()
     }
 
@@ -84,6 +90,24 @@ final class ModelDownloader: NSObject, @unchecked Sendable {
         DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: task)
         return true
     }
+
+    private func reportProgress(_ progress: Double) {
+        DispatchQueue.main.async { [onProgress] in
+            onProgress?(progress)
+        }
+    }
+
+    private func reportComplete() {
+        DispatchQueue.main.async { [onComplete] in
+            onComplete?()
+        }
+    }
+
+    private func reportError(_ message: String) {
+        DispatchQueue.main.async { [onError] in
+            onError?(message)
+        }
+    }
 }
 
 extension ModelDownloader: URLSessionDownloadDelegate {
@@ -96,7 +120,7 @@ extension ModelDownloader: URLSessionDownloadDelegate {
     ) {
         guard totalBytesExpectedToWrite > 0 else { return }
         let progress = Double(totalBytesWritten) / Double(totalBytesExpectedToWrite)
-        onProgress?(progress)
+        reportProgress(progress)
     }
 
     func urlSession(
@@ -118,9 +142,9 @@ extension ModelDownloader: URLSessionDownloadDelegate {
             try? FileManager.default.removeItem(at: ModelLocator.downloadResumeDataURL)
             session.finishTasksAndInvalidate()
             self.session = nil
-            onComplete?()
+            reportComplete()
         } catch {
-            onError?("Failed to save model: \(error.localizedDescription)")
+            reportError("Failed to save model: \(error.localizedDescription)")
         }
     }
 
@@ -148,6 +172,6 @@ extension ModelDownloader: URLSessionDownloadDelegate {
         session.finishTasksAndInvalidate()
         self.session = nil
         downloadTask = nil
-        onError?(error.localizedDescription)
+        reportError(error.localizedDescription)
     }
 }
