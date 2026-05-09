@@ -332,14 +332,25 @@ final class AppController {
         let hasSentinel = FileManager.default.fileExists(
             atPath: ModelLocator.onboardingCompleteFileURL.path
         )
-        let hasUsableModel = hasUsableModelAvailable
+        let modelSource = availableModelSource
 
-        hasCompletedOnboarding = hasSentinel && hasUsableModel
-        onboardingMode = hasSentinel && !hasUsableModel ? .modelRepair : .full
-        onboardingStep = .download
+        hasCompletedOnboarding = hasSentinel && modelSource != nil
 
-        if !hasCompletedOnboarding {
+        if hasSentinel && modelSource == nil {
+            onboardingMode = .modelRepair
+            onboardingStep = .download
             modelSetupState = .idle
+            return
+        }
+
+        onboardingMode = .full
+
+        if let modelSource {
+            modelSetupState = .ready(modelSource)
+            onboardingStep = permissionsManager.isMicrophoneGranted ? .ready : .permissions
+        } else {
+            modelSetupState = .idle
+            onboardingStep = .download
         }
     }
 
@@ -1532,7 +1543,19 @@ final class AppController {
     }
 
     private var hasUsableModelAvailable: Bool {
-        preferredSessionModelURL != nil
+        availableModelSource != nil
+    }
+
+    private var availableModelSource: ModelSource? {
+        if canUseModel(at: ModelLocator.appLocalModelURL) {
+            return .ownPath
+        }
+
+        if canUseModel(at: ModelLocator.superwhisperModelURL) {
+            return .superwhisper
+        }
+
+        return nil
     }
 
     private func beginModelDownload() {
