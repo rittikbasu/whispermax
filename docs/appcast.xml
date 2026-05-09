@@ -4,14 +4,16 @@
         <title>whispermax</title>
         <item>
             <title>0.1.3</title>
-            <pubDate>Sat, 09 May 2026 09:22:36 +0530</pubDate>
+            <pubDate>Sat, 09 May 2026 09:26:50 +0530</pubDate>
             <link>https://github.com/rittikbasu/whispermax</link>
             <sparkle:fullReleaseNotesLink>https://github.com/rittikbasu/whispermax/releases/tag/v0.1.3</sparkle:fullReleaseNotesLink>
             <sparkle:version>4</sparkle:version>
             <sparkle:shortVersionString>0.1.3</sparkle:shortVersionString>
             <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
             <sparkle:hardwareRequirements>arm64</sparkle:hardwareRequirements>
-            <description sparkle:format="markdown"><![CDATA[- better speech detection for silence, short recordings, and noisy rooms
+            <description sparkle:format="markdown"><![CDATA[## whispermax v0.1.3
+
+- better speech detection for silence, short recordings, and noisy rooms
 - accessibility is now optional, with clipboard fallback still working
 - clearer pasted vs copied feedback across browsers, native apps, and electron apps
 - transcript history now shows where text was pasted
