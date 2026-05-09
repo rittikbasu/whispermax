@@ -1244,12 +1244,13 @@ final class AppController {
             let insertionMethod = await insertionService.insert(cleanedTranscript, target: pendingInsertionTarget)
             lastTranscript = cleanedTranscript
             let storesInsertionTarget = insertionMethod != .copied
+            let audioDuration = preparedAudio.diagnostics.originalDuration
 
             let entry = TranscriptEntry(
                 id: UUID(),
                 text: cleanedTranscript,
                 createdAt: Date(),
-                duration: recordingDuration,
+                duration: audioDuration,
                 insertionMethod: insertionMethod,
                 insertionTargetName: storesInsertionTarget ? pendingInsertionTarget?.displayName : nil,
                 insertionTargetBundleIdentifier: storesInsertionTarget ? pendingInsertionTarget?.bundleIdentifier : nil,
