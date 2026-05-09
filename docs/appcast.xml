@@ -3,25 +3,22 @@
     <channel>
         <title>whispermax</title>
         <item>
-            <title>0.1.3</title>
-            <pubDate>Sat, 09 May 2026 09:26:50 +0530</pubDate>
+            <title>0.1.4</title>
+            <pubDate>Sat, 09 May 2026 10:21:53 +0530</pubDate>
             <link>https://github.com/rittikbasu/whispermax</link>
-            <sparkle:fullReleaseNotesLink>https://github.com/rittikbasu/whispermax/releases/tag/v0.1.3</sparkle:fullReleaseNotesLink>
-            <sparkle:version>4</sparkle:version>
-            <sparkle:shortVersionString>0.1.3</sparkle:shortVersionString>
+            <sparkle:fullReleaseNotesLink>https://github.com/rittikbasu/whispermax/releases/tag/v0.1.4</sparkle:fullReleaseNotesLink>
+            <sparkle:version>5</sparkle:version>
+            <sparkle:shortVersionString>0.1.4</sparkle:shortVersionString>
             <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
             <sparkle:hardwareRequirements>arm64</sparkle:hardwareRequirements>
-            <description sparkle:format="markdown"><![CDATA[## whispermax v0.1.3
+            <description sparkle:format="markdown"><![CDATA[## whispermax v0.1.4
 
-- better speech detection for silence, short recordings, and noisy rooms
-- accessibility is now optional, with clipboard fallback still working
-- clearer pasted vs copied feedback across browsers, native apps, and electron apps
-- transcript history now shows where text was pasted
-- history retention setting for keeping the latest 100, 500, or 1000 transcripts
-- refreshed app icon, sidebar mark, and menu bar icon
-- more reliable model download retries and safer local storage cleanup
+- fixed model downloads starting over after quitting whispermax
+- fixed onboarding going back to the download step after the model was already installed
+
+this is a small hotfix for the first-run setup flow.
 ]]></description>
-            <enclosure url="https://github.com/rittikbasu/whispermax/releases/download/v0.1.3/whispermax-v0.1.3-macos.zip" length="4540713" type="application/octet-stream" sparkle:edSignature="E+iN5i15FXirbhlU8Hqxzxg0OumujSKHLlkpimn6dpmRGkC+JnVB9OrHKCWANUtqH4n0/tCqi4kcbdWJvLS8BQ=="/>
+            <enclosure url="https://github.com/rittikbasu/whispermax/releases/download/v0.1.4/whispermax-v0.1.4-macos.zip" length="4542312" type="application/octet-stream" sparkle:edSignature="P1fiLhwi1Kr3tLKMcZkw2J6ti4lmWt2PWSnIHbkkOEEoSr3SCTopLAOATWh4nY6E3wkpP5DwVXDF3cX30jMEBg=="/>
         </item>
     </channel>
 </rss>
