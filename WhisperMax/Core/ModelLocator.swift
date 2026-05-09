@@ -6,6 +6,11 @@ enum ModelLocator {
         return base.appendingPathComponent("WhisperMax", isDirectory: true)
     }()
 
+    static let cacheDirectory: URL = {
+        let base = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first!
+        return base.appendingPathComponent("WhisperMax", isDirectory: true)
+    }()
+
     static let historyFileURL = appSupportDirectory.appendingPathComponent("history.json")
     static let wordDictionaryFileURL = appSupportDirectory.appendingPathComponent("word-dictionary.json")
     static let audioInputPreferenceFileURL = appSupportDirectory.appendingPathComponent("audio-input-preference.json")
@@ -14,7 +19,8 @@ enum ModelLocator {
     static let downloadResumeDataURL = appSupportDirectory.appendingPathComponent("model-download.resumedata")
     static let debugRecordingsDirectory = appSupportDirectory.appendingPathComponent("DebugRecordings", isDirectory: true)
     static let modelsDirectory = appSupportDirectory.appendingPathComponent("Models", isDirectory: true)
-    static let temporaryRecordingsDirectory = appSupportDirectory.appendingPathComponent("Recordings", isDirectory: true)
+    static let legacyTemporaryRecordingsDirectory = appSupportDirectory.appendingPathComponent("Recordings", isDirectory: true)
+    static let temporaryRecordingsDirectory = cacheDirectory.appendingPathComponent("Recordings", isDirectory: true)
     static let appLocalModelURL = modelsDirectory.appendingPathComponent("ggml-large-v3-turbo.bin")
 
     static let superwhisperModelURL: URL = {
@@ -28,7 +34,32 @@ enum ModelLocator {
     static func prepareDirectories() throws {
         try FileManager.default.createDirectory(at: appSupportDirectory, withIntermediateDirectories: true)
         try FileManager.default.createDirectory(at: modelsDirectory, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: cacheDirectory, withIntermediateDirectories: true)
         try FileManager.default.createDirectory(at: temporaryRecordingsDirectory, withIntermediateDirectories: true)
+    }
+
+    static func cleanTemporaryRecordings() {
+        let fileManager = FileManager.default
+        for directory in [temporaryRecordingsDirectory, legacyTemporaryRecordingsDirectory] {
+            guard let files = try? fileManager.contentsOfDirectory(
+                at: directory,
+                includingPropertiesForKeys: nil,
+                options: [.skipsHiddenFiles]
+            ) else {
+                continue
+            }
+
+            for file in files where file.pathExtension.lowercased() == "caf" {
+                try? fileManager.removeItem(at: file)
+            }
+        }
+
+        if let legacyFiles = try? fileManager.contentsOfDirectory(
+            at: legacyTemporaryRecordingsDirectory,
+            includingPropertiesForKeys: nil
+        ), legacyFiles.isEmpty {
+            try? fileManager.removeItem(at: legacyTemporaryRecordingsDirectory)
+        }
     }
 
     static func preferredModelURL() -> URL? {

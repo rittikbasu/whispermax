@@ -108,6 +108,7 @@ final class AudioRecorderService {
             try engine.start()
         } catch {
             inputNode.removeTap(onBus: 0)
+            try? FileManager.default.removeItem(at: url)
             stateLock.lock()
             self.engine = nil
             self.recordingFile = nil

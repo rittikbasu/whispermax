@@ -559,6 +559,7 @@ final class AppController {
     func launch() {
         do {
             try ModelLocator.prepareDirectories()
+            ModelLocator.cleanTemporaryRecordings()
         } catch {
             setError("Could not prepare whispermax storage.")
             return
