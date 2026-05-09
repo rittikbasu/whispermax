@@ -35,9 +35,14 @@ final class HistoryStore {
     func load() -> [TranscriptEntry] {
         do {
             try ModelLocator.prepareDirectories()
+            guard FileManager.default.fileExists(atPath: ModelLocator.historyFileURL.path) else {
+                return []
+            }
+
             let data = try Data(contentsOf: ModelLocator.historyFileURL)
             return try decoder.decode([TranscriptEntry].self, from: data)
         } catch {
+            preserveCorruptHistoryFile(loadError: error)
             return []
         }
     }
@@ -67,5 +72,49 @@ final class HistoryStore {
                 .sorted { $0.createdAt > $1.createdAt }
                 .prefix(limit.rawValue)
         )
+    }
+
+    private func preserveCorruptHistoryFile(loadError: Error) {
+        let fileManager = FileManager.default
+        let sourceURL = ModelLocator.historyFileURL
+        guard fileManager.fileExists(atPath: sourceURL.path) else {
+            return
+        }
+
+        let backupURL = Self.corruptBackupURL(fileManager: fileManager)
+
+        do {
+            try fileManager.moveItem(at: sourceURL, to: backupURL)
+            NSLog("Preserved corrupt history at \(backupURL.path): \(loadError.localizedDescription)")
+        } catch {
+            do {
+                try fileManager.copyItem(at: sourceURL, to: backupURL)
+                try? fileManager.removeItem(at: sourceURL)
+                NSLog("Copied corrupt history backup to \(backupURL.path): \(loadError.localizedDescription)")
+            } catch {
+                NSLog("Failed to preserve corrupt history: \(error.localizedDescription)")
+            }
+        }
+    }
+
+    private static func corruptBackupURL(fileManager: FileManager) -> URL {
+        let formatter = DateFormatter()
+        formatter.calendar = Calendar(identifier: .gregorian)
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.timeZone = .current
+        formatter.dateFormat = "yyyyMMdd-HHmmss"
+
+        let stamp = formatter.string(from: Date())
+        var candidate = ModelLocator.appSupportDirectory
+            .appendingPathComponent("history-corrupt-\(stamp).json")
+        var suffix = 2
+
+        while fileManager.fileExists(atPath: candidate.path) {
+            candidate = ModelLocator.appSupportDirectory
+                .appendingPathComponent("history-corrupt-\(stamp)-\(suffix).json")
+            suffix += 1
+        }
+
+        return candidate
     }
 }
