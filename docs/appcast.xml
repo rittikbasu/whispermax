@@ -3,22 +3,23 @@
     <channel>
         <title>whispermax</title>
         <item>
-            <title>0.1.4</title>
-            <pubDate>Sat, 09 May 2026 10:21:53 +0530</pubDate>
+            <title>0.1.5</title>
+            <pubDate>Wed, 20 May 2026 04:57:32 +0530</pubDate>
             <link>https://github.com/rittikbasu/whispermax</link>
-            <sparkle:fullReleaseNotesLink>https://github.com/rittikbasu/whispermax/releases/tag/v0.1.4</sparkle:fullReleaseNotesLink>
-            <sparkle:version>5</sparkle:version>
-            <sparkle:shortVersionString>0.1.4</sparkle:shortVersionString>
+            <sparkle:fullReleaseNotesLink>https://github.com/rittikbasu/whispermax/releases/tag/v0.1.5</sparkle:fullReleaseNotesLink>
+            <sparkle:version>6</sparkle:version>
+            <sparkle:shortVersionString>0.1.5</sparkle:shortVersionString>
             <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
             <sparkle:hardwareRequirements>arm64</sparkle:hardwareRequirements>
-            <description sparkle:format="markdown"><![CDATA[## whispermax v0.1.4
+            <description sparkle:format="markdown"><![CDATA[## whispermax v0.1.5
 
-- fixed model downloads starting over after quitting whispermax
-- fixed onboarding going back to the download step after the model was already installed
+- added a polished dmg installer
+- added a direct macos download button to the readme
+- fixed microphone permission settings showing the wrong state
 
-this is a small hotfix for the first-run setup flow.
+this release makes the first install path cleaner.
 ]]></description>
-            <enclosure url="https://github.com/rittikbasu/whispermax/releases/download/v0.1.4/whispermax-v0.1.4-macos.zip" length="4542312" type="application/octet-stream" sparkle:edSignature="P1fiLhwi1Kr3tLKMcZkw2J6ti4lmWt2PWSnIHbkkOEEoSr3SCTopLAOATWh4nY6E3wkpP5DwVXDF3cX30jMEBg=="/>
+            <enclosure url="https://github.com/rittikbasu/whispermax/releases/download/v0.1.5/whispermax-v0.1.5-macos.zip" length="4542968" type="application/octet-stream" sparkle:edSignature="caNK94MaT7Y0SDjxtrZ8SgrMwncnTe8Sxjdojr761iw6NbNlJOV/I+9kvuqZg2M0R1zTt0Ho8bJ1bRaFkgYNCQ=="/>
         </item>
     </channel>
 </rss>
