@@ -54,7 +54,15 @@ that is the whole point of this app.
 
 ### download a release
 
-download the latest `whispermax-*.zip` from github releases, unzip it, move `whispermax.app` into `/Applications`, and open it.
+<p>
+  <a href="https://github.com/rittikbasu/whispermax/releases/latest/download/whispermax-macos.dmg">
+    <img alt="download whispermax for macos" src="https://img.shields.io/badge/download_for_macos-111111?style=for-the-badge&logo=apple&logoColor=white">
+  </a>
+</p>
+
+download the latest dmg, open it, drag `whispermax.app` into `Applications`, and open it.
+
+the zip is still available on the release page for updates and fallback installs.
 
 because this app is currently **not notarized**, macos may block it on first launch. if that happens:
 
