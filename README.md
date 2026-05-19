@@ -2,6 +2,12 @@
 
 a local-first macos dictation app built because i got annoyed enough to make my own.
 
+<p>
+  <a href="https://github.com/rittikbasu/whispermax/releases/latest/download/whispermax-macos.dmg">
+    <img alt="download whispermax for macos" src="docs/assets/download-macos.svg">
+  </a>
+</p>
+
 ## why i built it
 
 i type a lot.
@@ -51,14 +57,6 @@ i wanted something that feels like a native mac utility:
 that is the whole point of this app.
 
 ## install
-
-### download a release
-
-<p>
-  <a href="https://github.com/rittikbasu/whispermax/releases/latest/download/whispermax-macos.dmg">
-    <img alt="download whispermax for macos" src="https://img.shields.io/badge/download_for_macos-111111?style=for-the-badge&logo=apple&logoColor=white">
-  </a>
-</p>
 
 download the latest dmg, open it, drag `whispermax.app` into `Applications`, and open it.
 
