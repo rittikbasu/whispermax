@@ -347,11 +347,15 @@ final class AppController {
 
         if let modelSource {
             modelSetupState = .ready(modelSource)
-            onboardingStep = permissionsManager.isMicrophoneGranted ? .ready : .permissions
+            onboardingStep = shouldResumePermissionsStep ? .permissions : .ready
         } else {
             modelSetupState = .idle
             onboardingStep = .download
         }
+    }
+
+    private var shouldResumePermissionsStep: Bool {
+        !permissionsManager.isMicrophoneGranted || !permissionsManager.isAccessibilityGranted
     }
 
     // MARK: - Main State
