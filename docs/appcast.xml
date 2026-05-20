@@ -3,23 +3,22 @@
     <channel>
         <title>whispermax</title>
         <item>
-            <title>0.1.5</title>
-            <pubDate>Wed, 20 May 2026 04:57:32 +0530</pubDate>
+            <title>0.1.6</title>
+            <pubDate>Wed, 20 May 2026 18:05:29 +0530</pubDate>
             <link>https://github.com/rittikbasu/whispermax</link>
-            <sparkle:fullReleaseNotesLink>https://github.com/rittikbasu/whispermax/releases/tag/v0.1.5</sparkle:fullReleaseNotesLink>
-            <sparkle:version>6</sparkle:version>
-            <sparkle:shortVersionString>0.1.5</sparkle:shortVersionString>
+            <sparkle:fullReleaseNotesLink>https://github.com/rittikbasu/whispermax/releases/tag/v0.1.6</sparkle:fullReleaseNotesLink>
+            <sparkle:version>7</sparkle:version>
+            <sparkle:shortVersionString>0.1.6</sparkle:shortVersionString>
             <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
             <sparkle:hardwareRequirements>arm64</sparkle:hardwareRequirements>
-            <description sparkle:format="markdown"><![CDATA[## whispermax v0.1.5
+            <description sparkle:format="markdown"><![CDATA[## whispermax v0.1.6
 
-- added a polished dmg installer
-- added a direct macos download button to the readme
-- fixed microphone permission settings showing the wrong state
+- made the dmg installer background cleaner
+- fixed onboarding resuming on the wrong step when Direct Insert was still missing
 
-this release makes the first install path cleaner.
+this is a small polish release for install and first-run setup.
 ]]></description>
-            <enclosure url="https://github.com/rittikbasu/whispermax/releases/download/v0.1.5/whispermax-v0.1.5-macos.zip" length="4542968" type="application/octet-stream" sparkle:edSignature="caNK94MaT7Y0SDjxtrZ8SgrMwncnTe8Sxjdojr761iw6NbNlJOV/I+9kvuqZg2M0R1zTt0Ho8bJ1bRaFkgYNCQ=="/>
+            <enclosure url="https://github.com/rittikbasu/whispermax/releases/download/v0.1.6/whispermax-v0.1.6-macos.zip" length="4543156" type="application/octet-stream" sparkle:edSignature="bRN/DfVWf1YvyVWIm4CvVtqws3V3IvnQMch2XhcdpKIPFK3X65Z2zHbMugrMeXNcGbVCzXXL2yqDYxe8eDRrCQ=="/>
         </item>
     </channel>
 </rss>
