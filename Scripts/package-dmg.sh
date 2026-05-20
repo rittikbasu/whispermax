@@ -59,7 +59,7 @@ TMP_DIR="$(mktemp -d)"
 EXTRACT_DIR="$TMP_DIR/extracted"
 STAGING_DIR="$TMP_DIR/staging"
 BACKGROUND_DIR="$STAGING_DIR/.background"
-BACKGROUND_PATH="$BACKGROUND_DIR/background.jpg"
+BACKGROUND_PATH="$BACKGROUND_DIR/background.png"
 RW_DMG_PATH="$TMP_DIR/${RELEASE_NAME}-rw.dmg"
 MOUNT_DIR=""
 
@@ -152,7 +152,7 @@ if !NSWorkspace.shared.setIcon(image, forFile: targetPath, options: []) {
 SWIFT
 fi
 
-sips -s format jpeg -s formatOptions 96 -s dpiWidth 144 -s dpiHeight 144 "$BACKGROUND_SOURCE_PATH" --out "$BACKGROUND_PATH" >/dev/null
+sips -s dpiWidth 144 -s dpiHeight 144 "$BACKGROUND_SOURCE_PATH" --out "$BACKGROUND_PATH" >/dev/null
 
 hdiutil create \
   -volname "$VOLUME_NAME" \
@@ -192,7 +192,7 @@ tell application "Finder"
   set arrangement of viewOptions to not arranged
   set icon size of viewOptions to 112
   set text size of viewOptions to 13
-  set background picture of viewOptions to file ".background:background.jpg" of targetFolder
+  set background picture of viewOptions to file ".background:background.png" of targetFolder
 
   set position of every item of targetFolder to {900, 900}
   set position of item "$APP_BUNDLE_NAME" of targetFolder to {212, 218}
