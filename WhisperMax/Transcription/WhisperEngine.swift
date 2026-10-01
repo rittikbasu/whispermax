@@ -23,6 +23,18 @@ struct TranscriptionResult: Sendable {
     let segmentDiagnostics: [TranscriptionSegmentDiagnostic]?
 }
 
+private final class WhisperContext {
+    let pointer: OpaquePointer
+
+    init(pointer: OpaquePointer) {
+        self.pointer = pointer
+    }
+
+    deinit {
+        whisper_free(pointer)
+    }
+}
+
 actor WhisperEngine {
     enum EngineError: LocalizedError {
         case initializationFailed
@@ -41,16 +53,10 @@ actor WhisperEngine {
     private static let noSpeechSegmentThreshold: Float = 0.80
 
     private let modelURL: URL
-    private var context: OpaquePointer?
+    private var context: WhisperContext?
 
     init(modelURL: URL) {
         self.modelURL = modelURL
-    }
-
-    deinit {
-        if let context {
-            whisper_free(context)
-        }
     }
 
     func prepare() throws {
@@ -61,11 +67,11 @@ actor WhisperEngine {
         var parameters = whisper_context_default_params()
         parameters.flash_attn = true
 
-        guard let context = whisper_init_from_file_with_params(modelURL.path, parameters) else {
+        guard let pointer = whisper_init_from_file_with_params(modelURL.path, parameters) else {
             throw EngineError.initializationFailed
         }
 
-        self.context = context
+        context = WhisperContext(pointer: pointer)
     }
 
     func transcribe(
@@ -75,7 +81,7 @@ actor WhisperEngine {
     ) throws -> TranscriptionResult {
         try prepare()
 
-        guard let context else {
+        guard let context = context?.pointer else {
             throw EngineError.initializationFailed
         }
 
