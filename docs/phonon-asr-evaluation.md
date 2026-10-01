@@ -1,55 +1,85 @@
-# Phonon-2 screening
-
-**Date:** 2026-10-01
-
-**Branch:** `feat/phonon-asr`
+# Phonon-2 evaluation
 
 ## Decision
 
-Do not replace Whisper with Phonon-2 on the evidence available. Phonon is much faster after warm-up and its weight file is smaller, but the synthetic screen showed substantially worse strict WER and higher peak memory. A small public human-speech screen is more mixed: Phonon did better on clips without numbers, while its written-out number forms are counted as WER errors. Keep Whisper as the product path until Phonon clears a human-checked personal set and its actual memory cost is acceptable.
+Keep Whisper as WhisperMax’s default until Phonon-2 is checked on paired recordings of the user’s own dictation and through the actual capture-to-insertion path. The evidence does not justify rejecting Phonon: our first public accuracy comparison used a scorer that mishandled ordinary number and filler differences, and our first memory comparison used a high-memory server runtime rather than Detta’s specialized adapter. The corrected results are mixed: Phonon leads on the small public speech sample; Whisper leads on the synthetic dictation set.
 
-This is a synthetic-voice screening result, not a verdict about Rittik's own voice. The repository contains reference text from earlier dictation work, but the matching speech recordings were not found. An automated similarity pass did not recover spoken reference/audio pairs among the 41 distinct WAV fixtures; the confidently recovered sidecar pairs are no-speech controls. No audio or transcript output is tracked.
+The 164 MB Phonon download is real, and the same model checkpoint can run quickly with a lower-memory packed path. That does not mean every Phonon runtime uses less memory. On this M1 Pro, Detta’s default dense path peaked above Whisper; its packed path peaked below Whisper only after its conversion cache was present. The first conversion still used more memory than Whisper.
 
-## Evaluation
+## What was tested
 
-The paired set has 24 reference utterances in clean, noisy, and rushed variants: 72 clips, eight synthetic voices, and 627 reference words. Every engine received the same clips. `Scripts/score_asr_benchmark.py` normalizes Unicode, case, and punctuation, then computes word error rate, character error rate, exact transcripts, and protected-term misses. The benchmark manifest, audio, and result JSONL files remain local under ignored `dist/` and `.private-bench/` paths.
+The runs used a 16 GB M1 Pro on macOS 27.0. The Mac was locked during this investigation, so I could not exercise the app UI, microphone permission, hotkey capture, or insertion into another app. I inspected the signed Detta 1.0.21 bundle and replayed its bundled speech adapter headlessly without launching the GUI or signing in.
 
-The runs were made on a 16 GB M1 Pro running macOS 27.0; WhisperMax's deployment target is macOS 14.0. The Phonon prototype ran offline with Python 3.12, `fermion-research` 0.2.4, `mlx-audio` 0.4.6, and MLX 0.32.3 macOS 14-target wheels. Torch was not installed. The host was not a macOS 14 machine.
+The evaluation uses two screening sets:
 
-| Engine | VAD | WER | CER | Exact | Protected-term misses | Warm p50 / p95 | Peak footprint |
-| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: |
-| Whisper large-v3-turbo | On | 9.09% | 4.78% | 52/72 | 19 | 891 / 923 ms | 1.90 GB |
-| Whisper large-v3-turbo | Off | 7.97% | 3.73% | 53/72 | 18 | 880 / 953 ms | 1.95 GB |
-| Phonon-2 dense16 | On | 20.10% | 12.70% | 33/72 | 39 | 68 / 144 ms | 3.26 GB |
-| Phonon-2 dense16 | Off | 18.82% | 10.96% | 34/72 | 36 | 66 / 74 ms | 3.72 GB |
+- Twenty short clips from separate Earnings-22 source recordings, with 301 reference words after normalization.
+- Seventy-two synthetic dictation clips in clean, noisy, and rushed variants, with 642 normalized reference words and eight generated voices.
 
-Phonon's measurements are local HTTP request/decode times from a persistent process; VAD preprocessing time and WhisperMax UI work are not included. The first Phonon process became ready in 10.67 seconds; its first decode took 3.01 seconds while compiling the initial MLX path. A later launch, with the OS shader cache warm, had a 0.12-second first request. These are not app-level release-to-visible-text measurements. Phonon's idle process used about 0.01 CPU seconds over 60 seconds.
+All engines in each comparison received the same canonical 16 kHz mono PCM WAV files. We verified the public clip IDs and offsets against the references and found no corrupt or mismatched audio. Re-encoding the public clips changed one transcript for some engines, so the final tables use the canonical waveforms for every row. Detta’s adapter also adds 250 ms of silence to each end; that is a real preprocessing difference, and its effect on accuracy was mixed.
 
-The Phonon weight file is 177 MB versus 1.62 GB for the installed Whisper model. Its prototype virtual environment is 395 MB and its local model cache is 325 MB; the environment still relies on a Homebrew Python interpreter, so this is not a self-contained distributable app.
+The checked-in `Scripts/score_asr_benchmark.py` only case-folds and tokenizes punctuation. It does not implement the [Open ASR English normalizer](https://github.com/huggingface/open_asr_leaderboard/blob/7ce09ca6c5fb4aac32b4a528d906356a21ad5399/normalizer/normalizer.py), which also reconciles number forms, fillers, and spelling variants. The first public result incorrectly counted outputs such as “seventeen point six percent” and “17.6%” as different words. The tables below use the leaderboard’s English normalizer pinned at commit `7ce09ca6c5fb4aac32b4a528d906356a21ad5399`; they measure recognized content, not formatting or insertion quality.
 
-## VAD result
+## Accuracy and warm decode time
 
-On the four local silence/noise/cough controls, no-VAD Whisper produced text for all four; VAD rejected all four in 50–129 ms each. On the 72 speech clips, VAD changed Whisper's median processing by about 12 ms and increased WER by 1.12 percentage points. Keep VAD in the existing app path for now: the small median cost buys reliable rejection on the controls. Revisit it on the personal voice set.
+The latency column is the median warm per-clip time from each engine path; model load is excluded. It includes that path’s audio front end and decode, but not WhisperMax’s hotkey, UI, or text insertion work.
 
-Phonon also made fewer errors without VAD on the synthetic speech clips, but its accuracy remained well behind Whisper. On the no-VAD control results, it produced text for the cough clip and suppressed the other three.
+### Public Earnings-22 screen
 
-## Public speech screen
+| Engine/path | Word edits / words | WER | Exact clips | Warm p50 |
+| --- | ---: | ---: | ---: | ---: |
+| Whisper large-v3-turbo | 17 / 301 | 5.65% | 11/20 | 861 ms |
+| Fermion HTTP, `tdt16,dense16` | 11 / 301 | 3.65% | 15/20 | 81 ms |
+| Detta C4 default, BF16 `tdt16,dense16` | 13 / 301 | 4.32% | 13/20 | 85 ms |
+| Detta C4 packed, BF16 `tdt16` | 13 / 301 | 4.32% | 13/20 | 140 ms |
 
-The synthetic corpus is not enough to make an accuracy decision. A fixed subset from the test-only short-form configuration of [Earnings-22](https://huggingface.co/datasets/distil-whisper/earnings22) was sampled locally from 24 separate source recordings. Four samples were excluded by preset rules for a sub-second fragment, fewer than four reference words, a crosstalk annotation, or an unfinished reference. The remaining 20 clips contain 314 reference words and 124 seconds of speech. The dataset describes its short-form clips as punctuation-aligned segments, capped at 20 seconds; this is spontaneous earnings-call speech, with different vocabulary, channels, and turn-taking from personal dictation. It is a useful external screen, not a proxy for Rittik's voice. The downloaded clips, references, selection notes, and per-sample outputs stay under ignored `.private-bench/` paths.
+One word changes this sample’s WER by 0.33 percentage points, so the 2-edit difference between the Phonon paths is not meaningful evidence of a quality gap. This small subset favors Phonon over Whisper; it is not a broad benchmark result or a proxy for personal dictation.
 
-Both models ran without VAD on the same clips, offline, on the M1 Pro. The sample is too small to call a winner, and strict WER is biased by number formatting: Phonon writes values such as `17.6%`, `2020`, and `€5.02` as words, while this scorer only normalizes case and punctuation. Those meaning-preserving format differences count as word edits. A diagnostic score on the 16 references without digits was 4.02% WER for Phonon and 8.48% for Whisper, across only 224 words; that subset deliberately does not measure numbers.
+### Synthetic dictation screen
 
-| Engine | Strict WER | CER | Exact | Warm processing/request p50 / p95 | Peak physical footprint |
-| --- | ---: | ---: | ---: | ---: | ---: |
-| Whisper large-v3-turbo, no VAD | 10.51% | 5.75% | 6/20 | 855 / 946 ms | 1.79 GB |
-| Phonon-2 dense16, no VAD | 12.10% | 9.95% | 11/20 | 99 / 259 ms | 3.98 GB |
+| Engine/path | Word edits / words | WER | Exact clips | Warm p50 |
+| --- | ---: | ---: | ---: | ---: |
+| Whisper large-v3-turbo | 41 / 642 | 6.39% | 56/72 | 837 ms |
+| Fermion HTTP, `tdt16,dense16` | 74 / 642 | 11.53% | 47/72 | 53 ms |
+| Detta C4 default, BF16 `tdt16,dense16` | 63 / 642 | 9.81% | 48/72 | 55 ms |
+| Detta C4 packed, BF16 `tdt16` | 64 / 642 | 9.97% | 49/72 | 98 ms |
 
-Whisper's timing is per-clip decode plus inference. Phonon's warm timing is a persistent local HTTP request plus inference; its server was ready in 9.0 seconds and its first decode took 113 ms. Neither is shortcut-to-visible-text timing. Phonon weights remain much smaller (177 MB versus 1.62 GB), but its observed peak footprint was about 2.2 times Whisper's on these runs. It also added a trailing "This year" to one sample and an extra "Uh" to another, so a future cleanup model cannot be assumed to fix the ASR path without its own paired test.
+Whisper leads this synthetic set by 22–23 word edits. Detta’s adapter improves on the HTTP path by 10–11 edits, but it does not close the gap. Synthetic voices can reveal number, name, and disfluency errors; they cannot settle which engine will work better on the user’s real voice.
 
-## Boundary and next step
+## Process memory
 
-No Phonon app integration or shortcut-to-microphone-to-insertion test was attempted after the quality gate failed. The current prototype proves offline inference on this macOS 27 host using macOS 14-target MLX wheels; it does not prove runtime behavior on macOS 14 or a relocatable, self-contained package. Those costs are deferred until a model first matches Whisper on a human-checked personal set.
+These are peak physical-footprint measurements for separate inference processes on the same M1 Pro. Whisper used `/usr/bin/time -l`; the Python Phonon processes used `footprint -p` and recorded `phys_footprint_peak`. Each process loaded its model once and replayed the whole matching set. Values are decimal GB. They do not include WhisperMax’s UI process or represent total system memory.
 
-The personal-use decision still requires a private, paired recording set from the user. [The recording guide](asr-personal-benchmark.md) prepares a small controlled mic/noise set plus two natural dictations. Keep those audio files, private references, and per-clip predictions out of Git; use public and personal scores as separate evidence.
+| Engine/runtime | Public 20 clips | Synthetic 72 clips |
+| --- | ---: | ---: |
+| Whisper large-v3-turbo | 1.882 GB | 1.880 GB |
+| Fermion HTTP, `tdt16,dense16` | 4.637 GB | 3.898 GB |
+| Detta C4 default, BF16 `tdt16,dense16` | 2.248 GB | 2.102 GB |
+| Detta C4 packed, BF16 `tdt16` | 1.647 GB | 1.495 GB |
 
-For this personal-use stage, defer clean-account relocation, notarization/quarantine, install/update disk accounting, and a physical macOS 14 machine. Revisit distribution gates only if the candidate first clears the personal accuracy check and you decide to share it. If it does, still prove the app's real capture-to-visible-insertion path on your M1 Pro before replacing the Whisper path.
+The first HTTP memory report stopped sampling before the last public clip and reported 3.98 GB. The corrected run sampled through all 20 clips and peaked at 4.64 GB. This was a runtime and measurement-window problem, not an intrinsic memory requirement of the packed checkpoint.
+
+Detta’s packed path used 12.5% less process footprint than Whisper on the public set and 20.5% less on the synthetic set, with warm decode about 6–9 times faster on these short clips. Its default dense path was 11.8–19.4% above Whisper’s peak. Packed Phonon remains a promising speed-and-memory option, but its margin depends on the conversion cache: on a cache miss the packed adapter took 9.89 seconds to load, 0.16 seconds to warm, and peaked at 2.85 GB. With a conversion cache present, measured load ranged from 1.9 to 3.3 seconds in these runs. The cache is stored on disk by the adapter.
+
+## What differs in the runtimes
+
+The model file inside Detta has the same SHA-256 as the checkpoint used by the Fermion runner: `4b6bfa3a12cc3c4e0a54f2ab3ec4ca7a842b09e5c7ecfc8e7ca0ac6cc8c11468`. The difference is how each runtime prepares and holds its weights:
+
+- The initial WhisperMax screen used Fermion’s HTTP service with the dense encoder path. Its first run also omitted the `tdt16` fast decode setting. Replays with `tdt16,dense16` produced the same transcripts; the flag changes the decode path, not recognition quality.
+- Detta’s bundled adapter uses BF16 activations, an FP32 log-mel front end, explicit MLX cache and wired-memory limits, and an on-disk converted-weight cache. Its default enables `tdt16,dense16`; setting only `tdt16` keeps the encoder packed and cuts warm-cache memory at the cost of about 55 ms per public clip in this sample.
+- The shipped Phonon model is roughly 178 MB on disk versus 1.62 GB for Whisper large-v3-turbo. Its packed weights are expanded or converted for particular runtimes, so download size does not equal peak inference memory.
+
+Fermion’s [Phonon-2 report](https://www.fermionresearch.com/research/phonon-2/) reports 5.21% average WER on seven full public English sets and 174× realtime on an M5 MacBook Air with model load excluded. Its table shows Phonon ahead of Whisper large-v3-turbo on the seven-set average, but not on every individual set. The report publishes download/on-disk size and throughput, not a comparable peak-RAM measurement. Its M5 throughput number is not an app-level latency claim for this M1 Pro.
+
+The Detta bundle also includes a warm engine daemon and local cleanup model. Static inspection shows hold-to-talk capture, partial decoding, and a cleanup fallback to raw text if a structural guard or timeout fails. The cleanup code describes an 8-bit Qwen3-0.6B fine-tune with roughly 367 MB of weights. The [public Detta repository](https://github.com/fermionresearch/detta-releases) currently publishes signed releases and a README, not the app source; I also found no separate Gluon model in [Fermion’s public model catalog](https://huggingface.co/FermionResearch). The shipped code and weights are inspectable inside the app bundle, but I cannot verify Gluon as a separately published open-source model. Its release README says recordings and transcripts are shared for improvement unless sharing is turned off in Settings. I did not sign in, launch the GUI, send user audio, or measure cleanup quality, latency, or memory.
+
+## VAD
+
+Inference speed alone does not say whether a hotkey activation contains speech or when speech has ended. On the four local silence/noise/cough controls, VAD rejected all four in 50–129 ms, while no-VAD Whisper emitted text for all four. On the synthetic speech set, VAD added about 12 ms to Whisper’s median and increased WER by 1.12 points. Earlier no-VAD Phonon screening emitted text for the cough control and suppressed the other three.
+
+Keep VAD on the existing Whisper path. For a Phonon experiment, preserve VAD until the capture flow is tested. Detta’s hold-to-talk behavior could replace some endpointing work by making the user define the recording boundaries, but that should be evaluated against false starts, silence, and cancellation in the real app.
+
+## Next step
+
+The repository’s [recording guide](asr-personal-benchmark.md) already prepares a small controlled Mac-mic/AirPods set plus natural dictations. The saved reference texts do not have paired speech recordings. A few human-checked recordings from the user’s own voice are still the highest-value accuracy gate; keep the audio, references, and predictions in ignored local storage and out of Git.
+
+Once the Mac is unlocked, run Whisper and cached packed Phonon on identical recordings, then exercise the actual hotkey-to-visible-insertion path, silence rejection, cancellation, repeated dictation, clipboard fallback, and offline restart. For this personal-use stage, defer clean-account relocation, notarization, install accounting, and a physical macOS 14 machine.
