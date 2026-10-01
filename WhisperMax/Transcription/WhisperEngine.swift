@@ -47,6 +47,12 @@ actor WhisperEngine {
         self.modelURL = modelURL
     }
 
+    deinit {
+        if let context {
+            whisper_free(context)
+        }
+    }
+
     func prepare() throws {
         guard context == nil else {
             return

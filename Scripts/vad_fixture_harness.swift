@@ -1,6 +1,13 @@
 @preconcurrency import AVFoundation
 import Foundation
 
+struct DebugRecordingChunkPlan: Sendable {
+    let startSample: Int
+    let endSample: Int
+    let overlapLeadSamples: Int
+    let overlapTrailSamples: Int
+}
+
 private enum HarnessError: Error, LocalizedError {
     case missingModels
     case invalidPath(String)
@@ -42,17 +49,26 @@ private struct VADFixtureHarness {
         let fixturePaths = try resolveFixturePaths(from: fixtureArguments)
 
         let whisperEngine = WhisperEngine(modelURL: whisperModelURL)
+        let modelLoadStart = ProcessInfo.processInfo.systemUptime
         try await whisperEngine.prepare()
+        let modelLoadMilliseconds = (ProcessInfo.processInfo.systemUptime - modelLoadStart) * 1_000
+        print(String(format: "model load: %.0f ms", modelLoadMilliseconds))
         let speechActivityService = SpeechActivityService(modelURL: vadModelURL)
 
         for fixtureURL in fixturePaths {
             do {
+                let processingStart = ProcessInfo.processInfo.systemUptime
                 let result = try await runFixture(
                     at: fixtureURL,
                     speechActivityService: speechActivityService,
                     whisperEngine: whisperEngine
                 )
-                print(renderFixtureOutput(for: fixtureURL, result: result))
+                let processingMilliseconds = (ProcessInfo.processInfo.systemUptime - processingStart) * 1_000
+                print(renderFixtureOutput(
+                    for: fixtureURL,
+                    result: result,
+                    processingMilliseconds: processingMilliseconds
+                ))
             } catch {
                 print("[\(fixtureURL.lastPathComponent)] ERROR: \(error.localizedDescription)")
             }
@@ -146,10 +162,14 @@ private struct VADFixtureHarness {
         }
     }
 
-    private static func renderFixtureOutput(for url: URL, result: HarnessResult) -> String {
+    private static func renderFixtureOutput(
+        for url: URL,
+        result: HarnessResult,
+        processingMilliseconds: Double
+    ) -> String {
         var lines: [String] = []
         let duration = result.diagnostics.originalDuration
-        lines.append("[\(url.lastPathComponent)] \(String(format: "%.2fs", duration)) mode=\(result.diagnostics.mode.rawValue)")
+        lines.append("[\(url.lastPathComponent)] \(String(format: "%.2fs", duration)) mode=\(result.diagnostics.mode.rawValue) processing=\(String(format: "%.0f", processingMilliseconds))ms")
         lines.append("  speech regions: \(formatRegions(result.diagnostics.speechRegions))")
         if !result.chunks.isEmpty {
             lines.append("  chunks: \(formatChunks(result.chunks))")
