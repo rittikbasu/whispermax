@@ -15,7 +15,7 @@ private enum HarnessError: Error, LocalizedError {
     var errorDescription: String? {
         switch self {
         case .missingModels:
-            return "usage: vad_fixture_harness <whisper-model.bin> <vad-model.bin> [fixture path ...]"
+            return "usage: vad_fixture_harness <whisper-model.bin> <vad-model.bin> [--no-vad] [fixture path ...]"
         case .invalidPath(let path):
             return "Invalid fixture path: \(path)"
         }
@@ -45,7 +45,9 @@ private struct VADFixtureHarness {
 
         let whisperModelURL = URL(fileURLWithPath: arguments[0])
         let vadModelURL = URL(fileURLWithPath: arguments[1])
-        let fixtureArguments = Array(arguments.dropFirst(2))
+        let requestedFixtures = Array(arguments.dropFirst(2))
+        let usesVAD = requestedFixtures.first != "--no-vad"
+        let fixtureArguments = usesVAD ? requestedFixtures : Array(requestedFixtures.dropFirst())
         let fixturePaths = try resolveFixturePaths(from: fixtureArguments)
 
         let whisperEngine = WhisperEngine(modelURL: whisperModelURL)
@@ -60,6 +62,7 @@ private struct VADFixtureHarness {
                 let processingStart = ProcessInfo.processInfo.systemUptime
                 let result = try await runFixture(
                     at: fixtureURL,
+                    usesVAD: usesVAD,
                     speechActivityService: speechActivityService,
                     whisperEngine: whisperEngine
                 )
@@ -111,10 +114,27 @@ private struct VADFixtureHarness {
 
     private static func runFixture(
         at url: URL,
+        usesVAD: Bool,
         speechActivityService: SpeechActivityService,
         whisperEngine: WhisperEngine
     ) async throws -> HarnessResult {
         let samples = try AudioSampleDecoder.decodeWhisperSamples(from: url)
+        guard usesVAD else {
+            let transcription = try await whisperEngine.transcribe(samples: samples, prompt: nil)
+            let cleaned = TranscriptFormatter.normalize(transcription.text)
+            let duration = Double(samples.count) / AudioSampleDecoder.targetSampleRate
+            return HarnessResult(
+                transcript: cleaned.isEmpty ? nil : cleaned,
+                diagnostics: SpeechActivityDiagnostics(
+                    mode: .bypass,
+                    originalDuration: duration,
+                    speechRegions: [],
+                    totalSpeechDuration: 0,
+                    selectedDuration: duration
+                ),
+                chunks: []
+            )
+        }
         let prepared = speechActivityService.prepareTranscriptionAudio(from: samples)
 
         switch prepared {
