@@ -51,6 +51,9 @@ private struct VADFixtureHarness {
         let fixturePaths = try resolveFixturePaths(from: fixtureArguments)
 
         let whisperEngine = WhisperEngine(modelURL: whisperModelURL)
+        let dictionaryEntries = WordDictionaryStore().load()
+        let preferredTerms = dictionaryEntries.map(\.text)
+        let transcriptionPrompt = preferredTranscriptionPrompt(from: dictionaryEntries)
         let modelLoadStart = ProcessInfo.processInfo.systemUptime
         try await whisperEngine.prepare()
         let modelLoadMilliseconds = (ProcessInfo.processInfo.systemUptime - modelLoadStart) * 1_000
@@ -64,7 +67,9 @@ private struct VADFixtureHarness {
                     at: fixtureURL,
                     usesVAD: usesVAD,
                     speechActivityService: speechActivityService,
-                    whisperEngine: whisperEngine
+                    whisperEngine: whisperEngine,
+                    transcriptionPrompt: transcriptionPrompt,
+                    preferredTerms: preferredTerms
                 )
                 let processingMilliseconds = (ProcessInfo.processInfo.systemUptime - processingStart) * 1_000
                 print(renderFixtureOutput(
@@ -116,12 +121,14 @@ private struct VADFixtureHarness {
         at url: URL,
         usesVAD: Bool,
         speechActivityService: SpeechActivityService,
-        whisperEngine: WhisperEngine
+        whisperEngine: WhisperEngine,
+        transcriptionPrompt: String?,
+        preferredTerms: [String]
     ) async throws -> HarnessResult {
         let samples = try AudioSampleDecoder.decodeWhisperSamples(from: url)
         guard usesVAD else {
-            let transcription = try await whisperEngine.transcribe(samples: samples, prompt: nil)
-            let cleaned = TranscriptFormatter.normalize(transcription.text)
+            let transcription = try await whisperEngine.transcribe(samples: samples, prompt: transcriptionPrompt)
+            let cleaned = TranscriptFormatter.normalize(transcription.text, preferredTerms: preferredTerms)
             let duration = Double(samples.count) / AudioSampleDecoder.targetSampleRate
             return HarnessResult(
                 transcript: cleaned.isEmpty ? nil : cleaned,
@@ -145,24 +152,39 @@ private struct VADFixtureHarness {
                 chunks: []
             )
         case .singlePass(let trimmedSamples, let diagnostics):
-            let transcription = try await whisperEngine.transcribe(samples: trimmedSamples, prompt: nil)
-            let cleaned = TranscriptFormatter.normalize(transcription.text)
+            let transcription = try await whisperEngine.transcribe(
+                samples: trimmedSamples,
+                prompt: transcriptionPrompt
+            )
+            let cleaned = TranscriptFormatter.normalize(transcription.text, preferredTerms: preferredTerms)
+            let shouldReject = cleaned.isEmpty || TranscriptionChunkPolicy.shouldRejectSinglePass(
+                result: transcription,
+                text: cleaned,
+                selectedDuration: Double(trimmedSamples.count) / AudioSampleDecoder.targetSampleRate,
+                mode: diagnostics.mode
+            )
             return HarnessResult(
-                transcript: cleaned.isEmpty ? nil : cleaned,
+                transcript: shouldReject ? nil : cleaned,
                 diagnostics: diagnostics,
                 chunks: []
             )
         case .chunked(let chunks, let diagnostics):
             var chunkTexts: [String] = []
             chunkTexts.reserveCapacity(chunks.count)
-            var rollingContext = ""
+            var rollingContext = transcriptionPrompt ?? ""
 
             for chunk in chunks {
                 let transcription = try await whisperEngine.transcribe(
                     samples: chunk.samples,
-                    prompt: composeChunkPrompt(rollingContext: rollingContext)
+                    prompt: composeChunkPrompt(
+                        basePrompt: transcriptionPrompt,
+                        rollingContext: rollingContext
+                    )
                 )
-                let cleaned = TranscriptFormatter.normalize(transcription.text)
+                let cleaned = TranscriptFormatter.normalize(
+                    transcription.text,
+                    preferredTerms: preferredTerms
+                )
                 guard !cleaned.isEmpty else {
                     continue
                 }
@@ -173,7 +195,7 @@ private struct VADFixtureHarness {
                 rollingContext = updatedChunkContext(from: chunkTexts)
             }
 
-            let stitched = TranscriptFormatter.stitch(chunkTexts)
+            let stitched = TranscriptFormatter.stitch(chunkTexts, preferredTerms: preferredTerms)
             return HarnessResult(
                 transcript: stitched.isEmpty ? nil : stitched,
                 diagnostics: diagnostics,
@@ -287,9 +309,43 @@ private struct VADFixtureHarness {
             .map(String.init)
     }
 
-    private static func composeChunkPrompt(rollingContext: String) -> String? {
+    private static func preferredTranscriptionPrompt(from entries: [WordDictionaryEntry]) -> String? {
+        var selectedTerms: [String] = []
+        var characterBudget = 0
+        let orderedTerms = entries.sorted { $0.createdAt > $1.createdAt }.map(\.text)
+
+        for term in orderedTerms {
+            let separatorCost = selectedTerms.isEmpty ? 0 : 2
+            let nextCost = characterBudget + separatorCost + term.count
+            guard nextCost <= 320 else {
+                break
+            }
+
+            selectedTerms.append(term)
+            characterBudget = nextCost
+        }
+
+        guard !selectedTerms.isEmpty else {
+            return nil
+        }
+
+        return "Preferred spellings: \(selectedTerms.joined(separator: ", "))"
+    }
+
+    private static func composeChunkPrompt(basePrompt: String?, rollingContext: String) -> String? {
+        let base = basePrompt?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         let context = rollingContext.trimmingCharacters(in: .whitespacesAndNewlines)
-        return context.isEmpty ? nil : "Recent transcript context:\n\(context)"
+
+        switch (base.isEmpty, context.isEmpty) {
+        case (true, true):
+            return nil
+        case (false, true):
+            return base
+        case (true, false):
+            return "Recent transcript context:\n\(context)"
+        case (false, false):
+            return "\(base)\n\nRecent transcript context:\n\(context)"
+        }
     }
 
     private static func updatedChunkContext(from chunkTexts: [String]) -> String {
