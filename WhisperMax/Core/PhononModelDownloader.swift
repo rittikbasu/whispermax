@@ -168,11 +168,13 @@ final class PhononModelDownloader: NSObject, @unchecked Sendable {
     private func installStagedModel() throws {
         try PhononModelPackage.writeInstallationMarker(in: stagingURL)
 
-        let previousURL = ModelLocator.modelsDirectory.appendingPathComponent(".Phonon-2-CoreML.previous")
-        try? fileManager.removeItem(at: previousURL)
+        let previousURL = ModelLocator.phononPreviousModelURL
 
         let hadPreviousModel = fileManager.fileExists(atPath: destinationURL.path)
         if hadPreviousModel {
+            if fileManager.fileExists(atPath: previousURL.path) {
+                try fileManager.removeItem(at: previousURL)
+            }
             try fileManager.moveItem(at: destinationURL, to: previousURL)
         }
 
@@ -183,6 +185,10 @@ final class PhononModelDownloader: NSObject, @unchecked Sendable {
             }
         } catch {
             if hadPreviousModel, !fileManager.fileExists(atPath: destinationURL.path) {
+                try? fileManager.moveItem(at: previousURL, to: destinationURL)
+            } else if !hadPreviousModel,
+                      !fileManager.fileExists(atPath: destinationURL.path),
+                      fileManager.fileExists(atPath: previousURL.path) {
                 try? fileManager.moveItem(at: previousURL, to: destinationURL)
             }
             throw error

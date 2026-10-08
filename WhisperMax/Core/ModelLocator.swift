@@ -22,6 +22,7 @@ enum ModelLocator {
     static let legacyTemporaryRecordingsDirectory = appSupportDirectory.appendingPathComponent("Recordings", isDirectory: true)
     static let temporaryRecordingsDirectory = cacheDirectory.appendingPathComponent("Recordings", isDirectory: true)
     static let phononModelURL = modelsDirectory.appendingPathComponent("Phonon-2-CoreML", isDirectory: true)
+    static let phononPreviousModelURL = modelsDirectory.appendingPathComponent(".Phonon-2-CoreML.previous", isDirectory: true)
     static let phononStagingModelURL = modelsDirectory.appendingPathComponent(".Phonon-2-CoreML.partial", isDirectory: true)
     static let phononDownloadResumeDataURL = appSupportDirectory.appendingPathComponent("phonon-model-download.resumedata")
     static let phononDownloadResumeAssetURL = appSupportDirectory.appendingPathComponent("phonon-model-download.asset")
@@ -42,6 +43,15 @@ enum ModelLocator {
         try FileManager.default.createDirectory(at: modelsDirectory, withIntermediateDirectories: true)
         try FileManager.default.createDirectory(at: cacheDirectory, withIntermediateDirectories: true)
         try FileManager.default.createDirectory(at: temporaryRecordingsDirectory, withIntermediateDirectories: true)
+
+        if !FileManager.default.fileExists(atPath: phononModelURL.path),
+           FileManager.default.fileExists(atPath: phononPreviousModelURL.path) {
+            do {
+                try FileManager.default.moveItem(at: phononPreviousModelURL, to: phononModelURL)
+            } catch {
+                NSLog("WhisperMax could not restore its previous Phonon model: %@", error.localizedDescription)
+            }
+        }
     }
 
     static func cleanTemporaryRecordings() {

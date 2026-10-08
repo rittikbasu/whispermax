@@ -236,12 +236,17 @@ final class AppController {
         return false
     }
 
+    var isModelPrepared: Bool {
+        phase == .ready && transcriptionEngine != nil
+    }
+
     func startModelSetup() {
         if case .downloading = modelSetupState {
             return
         }
 
         if case .ready = modelSetupState, hasUsableModelAvailable {
+            startModelPreparation()
             return
         }
 
@@ -297,6 +302,11 @@ final class AppController {
         guard hasUsableModelAvailable else {
             enterModelRepairMode()
             startModelSetup()
+            return
+        }
+
+        guard isModelPrepared else {
+            startModelPreparation()
             return
         }
 
@@ -1511,6 +1521,7 @@ final class AppController {
         try? FileManager.default.removeItem(at: ModelLocator.phononDownloadResumeDataURL)
         try? FileManager.default.removeItem(at: ModelLocator.phononDownloadResumeAssetURL)
         modelSetupState = .ready
+        startModelPreparation()
     }
 
     private func enterModelRepairMode() {
