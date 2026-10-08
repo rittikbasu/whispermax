@@ -28,6 +28,10 @@ targets:
     platform: macOS
     sources:
       - path: WhisperMax
+        excludes:
+          - "**/__pycache__/**"
+    resources:
+      - path: WhisperMax/Resources/qwen_mlx_worker.py
     dependencies:
       - package: Sparkle
       - framework: Vendor/whisper.xcframework

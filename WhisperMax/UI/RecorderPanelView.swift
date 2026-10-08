@@ -186,6 +186,8 @@ private struct RecorderControlRail: View {
         switch phase {
         case .recording:
             RecorderActionStrip(hotkeyText: hotkeyText, stop: stop, cancel: cancel)
+        case .transcribing:
+            RecorderCancelAction(cancel: cancel)
         case .error(.microphonePermissionRequired):
             RecorderRecoveryStrip(title: "Grant Access", action: openMicrophoneSettings)
         default:
@@ -388,6 +390,21 @@ private struct RecorderActionStrip: View {
             }
             .buttonStyle(RecorderRailButtonStyle(weight: .medium, color: .white.opacity(0.50)))
         }
+        .frame(height: 38)
+    }
+}
+
+private struct RecorderCancelAction: View {
+    let cancel: () -> Void
+
+    var body: some View {
+        Button(action: cancel) {
+            HStack(spacing: 8) {
+                Text("Cancel")
+                RecorderKeyBadge(text: "Esc")
+            }
+        }
+        .buttonStyle(RecorderRailButtonStyle(weight: .medium, color: .white.opacity(0.62)))
         .frame(height: 38)
     }
 }
