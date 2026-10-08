@@ -1,4 +1,13 @@
 WhisperMax.xcodeproj
+!WhisperMax.xcodeproj/
+WhisperMax.xcodeproj/*
+!WhisperMax.xcodeproj/project.xcworkspace/
+WhisperMax.xcodeproj/project.xcworkspace/*
+!WhisperMax.xcodeproj/project.xcworkspace/xcshareddata/
+WhisperMax.xcodeproj/project.xcworkspace/xcshareddata/*
+!WhisperMax.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/
+WhisperMax.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/*
+!WhisperMax.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved
 Vendor/whisper.xcframework
 build
 DerivedData

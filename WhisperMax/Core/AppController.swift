@@ -37,6 +37,7 @@ enum RecordingPhase: Equatable {
 enum RecorderIssue: Equatable {
     case microphonePermissionRequired
     case noSpeechDetected
+    case speechDetectionUnavailable
     case generic(String)
 
     var statusMessage: String {
@@ -45,6 +46,8 @@ enum RecorderIssue: Equatable {
             return "Microphone access is required for local dictation."
         case .noSpeechDetected:
             return "No speech detected."
+        case .speechDetectionUnavailable:
+            return "Speech detection is unavailable. Restart WhisperMax and try again."
         case .generic(let message):
             return message
         }
@@ -56,6 +59,8 @@ enum RecorderIssue: Equatable {
             return "Microphone access needed"
         case .noSpeechDetected:
             return "No speech detected"
+        case .speechDetectionUnavailable:
+            return "Couldn’t analyze speech"
         case .generic:
             return "Try again"
         }
@@ -67,6 +72,8 @@ enum RecorderIssue: Equatable {
             return nil
         case .noSpeechDetected:
             return "Try speaking a little louder or closer to the mic"
+        case .speechDetectionUnavailable:
+            return "Restart WhisperMax and try again"
         case .generic:
             return "Recorder reset"
         }
@@ -78,6 +85,8 @@ enum RecorderIssue: Equatable {
             return 4.2
         case .noSpeechDetected:
             return 2.2
+        case .speechDetectionUnavailable:
+            return 3.5
         case .generic:
             return 1.8
         }
@@ -182,6 +191,11 @@ final class AppController {
         case downloading(Double)
         case ready(ModelSource)
         case failed(String)
+    }
+
+    private enum ExperimentalSpeechGate {
+        // Candidate threshold for opt-in raw-audio backends; Whisper is unchanged.
+        static let minimumPeakProbability: Float = 0.5
     }
 
     var hasCompletedOnboarding: Bool = false
@@ -336,7 +350,7 @@ final class AppController {
         )
         let modelSource = availableModelSource
 
-        let selectedBackendAvailable = transcriptionBackendSelection.usesQwen || modelSource != nil
+        let selectedBackendAvailable = transcriptionBackendSelection.usesOriginalAudio || modelSource != nil
         hasCompletedOnboarding = hasSentinel && selectedBackendAvailable
 
         if hasSentinel && !selectedBackendAvailable {
@@ -348,7 +362,7 @@ final class AppController {
 
         onboardingMode = .full
 
-        if transcriptionBackendSelection.usesQwen {
+        if transcriptionBackendSelection.usesOriginalAudio {
             modelSetupState = .ready(.ownPath)
             onboardingStep = shouldResumePermissionsStep ? .permissions : .ready
             return
@@ -1167,6 +1181,28 @@ final class AppController {
     }
 
     private func preloadModel() async {
+        if case .phononCoreML(let configuration) = transcriptionBackendSelection {
+            let engine = PhononCoreMLEngine(configuration: configuration)
+            transcriptionEngine = engine
+            modelPath = configuration.modelURL.path
+            modelDisplayName = "Phonon-2 Core ML · 10s (Prototype)"
+
+            do {
+                let startedAt = Date.timeIntervalSinceReferenceDate
+                try await engine.prepare()
+                let elapsedMilliseconds = (Date.timeIntervalSinceReferenceDate - startedAt) * 1_000
+                NSLog("WhisperMax ASR model ready: %@ %.0f ms", modelDisplayName, elapsedMilliseconds)
+                phase = .ready
+                statusText = idleStatusText
+            } catch {
+                await engine.shutdown()
+                transcriptionEngine = nil
+                guard !Task.isCancelled else { return }
+                setError("Failed to load the local Phonon prototype: \(error.localizedDescription)")
+            }
+            return
+        }
+
         if case .qwen(let configuration) = transcriptionBackendSelection {
             let engine = QwenMLXEngine(configuration: configuration)
             transcriptionEngine = engine
@@ -1310,29 +1346,38 @@ final class AppController {
         }
 
         do {
-            let preparedAudio = try speechActivityService.prepareTranscriptionAudio(from: url)
-            let cleanedTranscript: String
             let includeTokenDiagnostics = debugRecordingStore.isEnabled
+            let diagnostics: SpeechActivityDiagnostics
+            let debugChunkPlans: [DebugRecordingChunkPlan]
+            let cleanedTranscript: String
             var transcriptionPasses: [DebugRecordingTranscriptionPass] = []
 
-            switch preparedAudio {
-            case .noSpeech:
-                captureDebugRecording(
-                    from: url,
-                    result: .noSpeech,
-                    transcript: nil,
-                    insertionMethod: nil,
-                    issueMessage: RecorderIssue.noSpeechDetected.statusMessage,
-                    errorMessage: nil,
-                    diagnostics: preparedAudio.diagnostics,
-                    chunks: preparedAudio.debugChunkPlans,
-                    transcriptionPasses: []
-                )
-                setNoSpeechDetected()
-                return
-            case .singlePass(let samples, let diagnostics):
-                if transcriptionBackendSelection.usesQwen,
-                   diagnostics.mode == .shortFallback || diagnostics.mode == .bypass {
+            if transcriptionBackendSelection.usesOriginalAudio {
+                diagnostics = try speechActivityService.analyzeSpeech(from: url)
+                debugChunkPlans = []
+
+                if transcriptionBackendSelection.requiresSpeechGate,
+                   diagnostics.mode == .bypass {
+                    let issue = RecorderIssue.speechDetectionUnavailable
+                    captureDebugRecording(
+                        from: url,
+                        result: .error,
+                        transcript: nil,
+                        insertionMethod: nil,
+                        issueMessage: issue.statusMessage,
+                        errorMessage: nil,
+                        diagnostics: diagnostics,
+                        chunks: debugChunkPlans,
+                        transcriptionPasses: []
+                    )
+                    setRecorderIssue(issue)
+                    return
+                }
+
+                if transcriptionBackendSelection.requiresSpeechGate,
+                   !diagnostics.speechRegions.contains(where: {
+                       $0.maxProbability >= ExperimentalSpeechGate.minimumPeakProbability
+                   }) {
                     captureDebugRecording(
                         from: url,
                         result: .noSpeech,
@@ -1341,7 +1386,7 @@ final class AppController {
                         issueMessage: RecorderIssue.noSpeechDetected.statusMessage,
                         errorMessage: nil,
                         diagnostics: diagnostics,
-                        chunks: preparedAudio.debugChunkPlans,
+                        chunks: debugChunkPlans,
                         transcriptionPasses: []
                     )
                     setNoSpeechDetected()
@@ -1349,12 +1394,8 @@ final class AppController {
                 }
 
                 let execution = try await transcribeSinglePass(
-                    input: transcriptionBackendSelection.usesQwen
-                        ? .originalAudio(url)
-                        : .preparedSamples(samples),
-                    selectedDuration: transcriptionBackendSelection.usesQwen
-                        ? diagnostics.originalDuration
-                        : Double(samples.count) / AudioSampleDecoder.targetSampleRate,
+                    input: .originalAudio(url),
+                    selectedDuration: diagnostics.originalDuration,
                     using: transcriptionEngine,
                     includeTokenDiagnostics: includeTokenDiagnostics,
                     mode: diagnostics.mode
@@ -1369,34 +1410,21 @@ final class AppController {
                         insertionMethod: nil,
                         issueMessage: RecorderIssue.noSpeechDetected.statusMessage,
                         errorMessage: nil,
-                        diagnostics: preparedAudio.diagnostics,
-                        chunks: preparedAudio.debugChunkPlans,
+                        diagnostics: diagnostics,
+                        chunks: debugChunkPlans,
                         transcriptionPasses: transcriptionPasses
                     )
                     setNoSpeechDetected()
                     return
                 }
                 cleanedTranscript = transcript
-            case .chunked(let chunks, let diagnostics):
-                let execution: TranscriptionExecution
-                if transcriptionBackendSelection.usesQwen {
-                    execution = try await transcribeSinglePass(
-                        input: .originalAudio(url),
-                        selectedDuration: diagnostics.originalDuration,
-                        using: transcriptionEngine,
-                        includeTokenDiagnostics: includeTokenDiagnostics,
-                        mode: diagnostics.mode
-                    )
-                } else {
-                    execution = try await transcribeChunked(
-                        chunks: chunks,
-                        using: transcriptionEngine,
-                        includeTokenDiagnostics: includeTokenDiagnostics
-                    )
-                }
-                transcriptionPasses = execution.debugPasses
+            } else {
+                let preparedAudio = try speechActivityService.prepareTranscriptionAudio(from: url)
+                diagnostics = preparedAudio.diagnostics
+                debugChunkPlans = preparedAudio.debugChunkPlans
 
-                guard let transcript = execution.text else {
+                switch preparedAudio {
+                case .noSpeech:
                     captureDebugRecording(
                         from: url,
                         result: .noSpeech,
@@ -1404,14 +1432,63 @@ final class AppController {
                         insertionMethod: nil,
                         issueMessage: RecorderIssue.noSpeechDetected.statusMessage,
                         errorMessage: nil,
-                        diagnostics: preparedAudio.diagnostics,
-                        chunks: preparedAudio.debugChunkPlans,
-                        transcriptionPasses: transcriptionPasses
+                        diagnostics: diagnostics,
+                        chunks: debugChunkPlans,
+                        transcriptionPasses: []
                     )
                     setNoSpeechDetected()
                     return
+                case .singlePass(let samples, let diagnostics):
+                    let execution = try await transcribeSinglePass(
+                        input: .preparedSamples(samples),
+                        selectedDuration: Double(samples.count) / AudioSampleDecoder.targetSampleRate,
+                        using: transcriptionEngine,
+                        includeTokenDiagnostics: includeTokenDiagnostics,
+                        mode: diagnostics.mode
+                    )
+                    transcriptionPasses = execution.debugPasses
+
+                    guard let transcript = execution.text else {
+                        captureDebugRecording(
+                            from: url,
+                            result: .noSpeech,
+                            transcript: nil,
+                            insertionMethod: nil,
+                            issueMessage: RecorderIssue.noSpeechDetected.statusMessage,
+                            errorMessage: nil,
+                            diagnostics: diagnostics,
+                            chunks: debugChunkPlans,
+                            transcriptionPasses: transcriptionPasses
+                        )
+                        setNoSpeechDetected()
+                        return
+                    }
+                    cleanedTranscript = transcript
+                case .chunked(let chunks, let diagnostics):
+                    let execution = try await transcribeChunked(
+                        chunks: chunks,
+                        using: transcriptionEngine,
+                        includeTokenDiagnostics: includeTokenDiagnostics
+                    )
+                    transcriptionPasses = execution.debugPasses
+
+                    guard let transcript = execution.text else {
+                        captureDebugRecording(
+                            from: url,
+                            result: .noSpeech,
+                            transcript: nil,
+                            insertionMethod: nil,
+                            issueMessage: RecorderIssue.noSpeechDetected.statusMessage,
+                            errorMessage: nil,
+                            diagnostics: diagnostics,
+                            chunks: debugChunkPlans,
+                            transcriptionPasses: transcriptionPasses
+                        )
+                        setNoSpeechDetected()
+                        return
+                    }
+                    cleanedTranscript = transcript
                 }
-                cleanedTranscript = transcript
             }
 
             try Task.checkCancellation()
@@ -1419,7 +1496,7 @@ final class AppController {
             try Task.checkCancellation()
             lastTranscript = cleanedTranscript
             let storesInsertionTarget = insertionMethod != .copied
-            let audioDuration = preparedAudio.diagnostics.originalDuration
+            let audioDuration = diagnostics.originalDuration
 
             let entry = TranscriptEntry(
                 id: UUID(),
@@ -1453,8 +1530,8 @@ final class AppController {
                 insertionMethod: insertionMethod,
                 issueMessage: nil,
                 errorMessage: nil,
-                diagnostics: preparedAudio.diagnostics,
-                chunks: preparedAudio.debugChunkPlans,
+                diagnostics: diagnostics,
+                chunks: debugChunkPlans,
                 transcriptionPasses: transcriptionPasses
             )
             insertionTargetName = insertionMethod == .copied ? nil : pendingInsertionTarget?.displayName
@@ -1492,7 +1569,7 @@ final class AppController {
     ) async throws -> TranscriptionExecution {
         let result = try await engine.transcribe(
             input: input,
-            prompt: transcriptionBackendSelection.usesQwen ? nil : preferredTranscriptionPrompt,
+            prompt: transcriptionBackendSelection.usesOriginalAudio ? nil : preferredTranscriptionPrompt,
             includeTokenDiagnostics: includeTokenDiagnostics,
             maxTokens: maximumOutputTokens(for: selectedDuration)
         )
@@ -1742,7 +1819,7 @@ final class AppController {
     }
 
     private var hasUsableModelAvailable: Bool {
-        transcriptionBackendSelection.usesQwen || availableModelSource != nil
+        transcriptionBackendSelection.usesOriginalAudio || availableModelSource != nil
     }
 
     private var availableModelSource: ModelSource? {

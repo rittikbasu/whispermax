@@ -25,6 +25,7 @@ protocol SpeechTranscriptionEngine: Actor {
 enum TranscriptionBackendSelection {
     case whisper
     case qwen(QwenMLXConfiguration)
+    case phononCoreML(PhononCoreMLConfiguration)
     case invalid(String)
 
     static func fromEnvironment(
@@ -34,36 +35,64 @@ enum TranscriptionBackendSelection {
         guard let backend = environment["WHISPERMAX_ASR_BACKEND"] else {
             return .whisper
         }
-        guard backend == "qwen-1.7b-8bit" else {
+        switch backend {
+        case "qwen-1.7b-8bit":
+            guard
+                let pythonPath = environment["WHISPERMAX_QWEN_PYTHON"],
+                let modelPath = environment["WHISPERMAX_QWEN_MODEL"],
+                let workerURL = bundle.url(forResource: "qwen_mlx_worker", withExtension: "py")
+            else {
+                return .invalid("The Qwen prototype is missing its local runtime or model.")
+            }
+
+            let pythonURL = URL(fileURLWithPath: pythonPath).standardizedFileURL
+            let modelURL = URL(fileURLWithPath: modelPath).standardizedFileURL
+            var isDirectory: ObjCBool = false
+            guard
+                FileManager.default.isExecutableFile(atPath: pythonURL.path),
+                FileManager.default.fileExists(atPath: modelURL.path, isDirectory: &isDirectory),
+                isDirectory.boolValue
+            else {
+                return .invalid("The Qwen prototype runtime or model path is unavailable.")
+            }
+
+            return .qwen(
+                QwenMLXConfiguration(pythonURL: pythonURL, modelURL: modelURL, workerURL: workerURL)
+            )
+        case "phonon-coreml-10s":
+            guard let modelPath = environment["WHISPERMAX_PHONON_MODEL"] else {
+                return .invalid("The Phonon prototype is missing its local model path.")
+            }
+
+            let modelURL = URL(fileURLWithPath: modelPath).standardizedFileURL
+            var isDirectory: ObjCBool = false
+            guard
+                FileManager.default.fileExists(atPath: modelURL.path, isDirectory: &isDirectory),
+                isDirectory.boolValue,
+                FileManager.default.fileExists(atPath: modelURL.appendingPathComponent("manifest.json").path),
+                FileManager.default.fileExists(atPath: modelURL.appendingPathComponent("decoder.bin").path),
+                FileManager.default.fileExists(atPath: modelURL.appendingPathComponent("Phonon-2.mlpackage", isDirectory: true).path)
+            else {
+                return .invalid("The Phonon prototype model folder is unavailable or incomplete.")
+            }
+
+            return .phononCoreML(PhononCoreMLConfiguration(modelURL: modelURL))
+        default:
             return .invalid("Unknown experimental ASR backend.")
         }
-        guard
-            let pythonPath = environment["WHISPERMAX_QWEN_PYTHON"],
-            let modelPath = environment["WHISPERMAX_QWEN_MODEL"],
-            let workerURL = bundle.url(forResource: "qwen_mlx_worker", withExtension: "py")
-        else {
-            return .invalid("The Qwen prototype is missing its local runtime or model.")
-        }
-
-        let pythonURL = URL(fileURLWithPath: pythonPath).standardizedFileURL
-        let modelURL = URL(fileURLWithPath: modelPath).standardizedFileURL
-        var isDirectory: ObjCBool = false
-        guard
-            FileManager.default.isExecutableFile(atPath: pythonURL.path),
-            FileManager.default.fileExists(atPath: modelURL.path, isDirectory: &isDirectory),
-            isDirectory.boolValue
-        else {
-            return .invalid("The Qwen prototype runtime or model path is unavailable.")
-        }
-
-        return .qwen(
-            QwenMLXConfiguration(pythonURL: pythonURL, modelURL: modelURL, workerURL: workerURL)
-        )
     }
 
-    var usesQwen: Bool {
-        if case .qwen = self { return true }
-        return false
+    var usesOriginalAudio: Bool {
+        switch self {
+        case .qwen, .phononCoreML:
+            return true
+        case .whisper, .invalid:
+            return false
+        }
+    }
+
+    var requiresSpeechGate: Bool {
+        usesOriginalAudio
     }
 
     var setupError: String? {

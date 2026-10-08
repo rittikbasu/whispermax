@@ -1,7 +1,7 @@
 name: WhisperMax
 options:
   deploymentTarget:
-    macOS: "14.0"
+    macOS: "15.0"
   defaultConfig: Release
   createIntermediateGroups: true
 settings:
@@ -13,12 +13,15 @@ settings:
     VERSIONING_SYSTEM: apple-generic
     CODE_SIGN_ENTITLEMENTS: WhisperMax/WhisperMax.entitlements
     SWIFT_VERSION: 6.0
-    MACOSX_DEPLOYMENT_TARGET: "14.0"
+    MACOSX_DEPLOYMENT_TARGET: "15.0"
     ENABLE_DEBUG_DYLIB: NO
     GENERATE_INFOPLIST_FILE: NO
     INFOPLIST_FILE: WhisperMax/Info.plist
     CLANG_CXX_LANGUAGE_STANDARD: "gnu++20"
 packages:
+  PhononCoreML:
+    url: https://github.com/fermionresearch/phonon-coreml
+    exactVersion: 1.1.1
   Sparkle:
     url: https://github.com/sparkle-project/Sparkle
     from: 2.9.1
@@ -33,6 +36,7 @@ targets:
     resources:
       - path: WhisperMax/Resources/qwen_mlx_worker.py
     dependencies:
+      - package: PhononCoreML
       - package: Sparkle
       - framework: Vendor/whisper.xcframework
         embed: true

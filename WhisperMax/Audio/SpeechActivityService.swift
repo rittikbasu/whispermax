@@ -134,6 +134,50 @@ final class SpeechActivityService {
         return prepareTranscriptionAudio(from: samples)
     }
 
+    func analyzeSpeech(from audioURL: URL) throws -> SpeechActivityDiagnostics {
+        let samples = try AudioSampleDecoder.decodeWhisperSamples(from: audioURL)
+        return analyzeSpeech(in: samples)
+    }
+
+    private func analyzeSpeech(in samples: [Float]) -> SpeechActivityDiagnostics {
+        guard !samples.isEmpty else {
+            return diagnostics(
+                mode: .noSpeech,
+                originalSampleCount: 0,
+                regions: [],
+                selectedSampleCount: 0
+            )
+        }
+
+        guard let regions = detectedSpeechRegions(in: samples) else {
+            return diagnostics(
+                mode: .bypass,
+                originalSampleCount: samples.count,
+                regions: [],
+                selectedSampleCount: samples.count
+            )
+        }
+
+        guard !regions.isEmpty else {
+            let mode: SpeechActivityDiagnostics.Mode = shouldUseShortUtteranceFallback(for: samples.count)
+                ? .shortFallback
+                : .noSpeech
+            return diagnostics(
+                mode: mode,
+                originalSampleCount: samples.count,
+                regions: [],
+                selectedSampleCount: mode == .noSpeech ? 0 : samples.count
+            )
+        }
+
+        return diagnostics(
+            mode: .singlePass,
+            originalSampleCount: samples.count,
+            regions: regions,
+            selectedSampleCount: samples.count
+        )
+    }
+
     func prepareTranscriptionAudio(from samples: [Float]) -> PreparedTranscriptionAudio {
         guard !samples.isEmpty else {
             return .noSpeech(diagnostics(
@@ -144,57 +188,25 @@ final class SpeechActivityService {
             ))
         }
 
-        guard let vadContext = loadContextIfPossible() else {
+        let analysis = analyzeSpeech(in: samples)
+        guard analysis.mode != .bypass else {
             return .singlePass(
                 samples: samples,
-                diagnostics: diagnostics(
-                    mode: .bypass,
-                    originalSampleCount: samples.count,
-                    regions: [],
-                    selectedSampleCount: samples.count
-                )
+                diagnostics: analysis
             )
         }
 
-        let probabilities = detectSpeechProbabilities(context: vadContext, samples: samples)
-
-        guard let rawRegions = buildSpeechRegions(
-            context: vadContext,
-            samples: samples,
-            probabilities: probabilities
-        ) else {
-            return .singlePass(
-                samples: samples,
-                diagnostics: diagnostics(
-                    mode: .bypass,
-                    originalSampleCount: samples.count,
-                    regions: [],
-                    selectedSampleCount: samples.count
-                )
-            )
-        }
-
-        let mergedRegions = mergeAdjacentRegions(rawRegions)
+        let mergedRegions = analysis.speechRegions
 
         guard !mergedRegions.isEmpty else {
-            if shouldUseShortUtteranceFallback(for: samples.count) {
+            if analysis.mode == .shortFallback {
                 return .singlePass(
                     samples: samples,
-                    diagnostics: diagnostics(
-                        mode: .shortFallback,
-                        originalSampleCount: samples.count,
-                        regions: [],
-                        selectedSampleCount: samples.count
-                    )
+                    diagnostics: analysis
                 )
             }
 
-            return .noSpeech(diagnostics(
-                mode: .noSpeech,
-                originalSampleCount: samples.count,
-                regions: [],
-                selectedSampleCount: 0
-            ))
+            return .noSpeech(analysis)
         }
 
         if shouldUseTrimmedSinglePass(for: samples.count) {
@@ -254,6 +266,23 @@ final class SpeechActivityService {
         )
     }
 
+    private func detectedSpeechRegions(in samples: [Float]) -> [SpeechRegion]? {
+        guard let vadContext = loadContextIfPossible() else {
+            return nil
+        }
+
+        let probabilities = detectSpeechProbabilities(context: vadContext, samples: samples)
+        guard let rawRegions = buildSpeechRegions(
+            context: vadContext,
+            samples: samples,
+            probabilities: probabilities
+        ) else {
+            return nil
+        }
+
+        return mergeAdjacentRegions(rawRegions)
+    }
+
     private func detectSpeechProbabilities(context: OpaquePointer, samples: [Float]) -> [Float]? {
         let status = samples.withUnsafeBufferPointer { buffer in
             whisper_vad_detect_speech(context, buffer.baseAddress, Int32(buffer.count))
@@ -279,6 +308,9 @@ final class SpeechActivityService {
         guard !samples.isEmpty else {
             return []
         }
+        guard let probabilities, !probabilities.isEmpty else {
+            return nil
+        }
 
         var params = whisper_vad_default_params()
         params.threshold = Tuning.segmentThreshold
@@ -288,9 +320,7 @@ final class SpeechActivityService {
         params.speech_pad_ms = Int32(Tuning.internalSpeechPadMS)
         params.samples_overlap = 0
 
-        guard let segments = samples.withUnsafeBufferPointer({ buffer in
-            whisper_vad_segments_from_samples(context, params, buffer.baseAddress, Int32(buffer.count))
-        }) else {
+        guard let segments = whisper_vad_segments_from_probs(context, params) else {
             return nil
         }
         defer {
@@ -302,12 +332,7 @@ final class SpeechActivityService {
             return []
         }
 
-        let samplesPerProbabilityFrame: Double? = {
-            guard let probabilities, !probabilities.isEmpty else {
-                return nil
-            }
-            return Double(samples.count) / Double(probabilities.count)
-        }()
+        let samplesPerProbabilityFrame = Double(samples.count) / Double(probabilities.count)
 
         var regions: [SpeechRegion] = []
         regions.reserveCapacity(Int(count))
@@ -322,11 +347,7 @@ final class SpeechActivityService {
             }
 
             let probabilityWindow: ArraySlice<Float> = {
-                guard
-                    let probabilities,
-                    let samplesPerProbabilityFrame,
-                    samplesPerProbabilityFrame > 0
-                else {
+                guard samplesPerProbabilityFrame > 0 else {
                     return []
                 }
 

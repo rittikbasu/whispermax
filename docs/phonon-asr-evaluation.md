@@ -1,14 +1,24 @@
 # Phonon-2 evaluation
 
-## Decision
+## Current status — 2026-10-08
 
-Keep Whisper large-v3-turbo as WhisperMax’s default. The playback-confirmed v2 personal set shows Phonon-2 is faster, but every tested runtime makes more word errors overall and materially more errors on the twelve short takes closest to ordinary dictation. Phonon is markedly better on the two long takes, which account for 286 of the set’s 538 words and pull its aggregate CER down. That is useful evidence for long-form dictation, but it does not justify replacing the current default.
+The fresh 67-recording personal run puts Phonon-2 Core ML (10-second function) at the same 96 word edits as production Whisper across 1,166 normalized reference words (8.23% WER). Across repeat runs, warm native inference measured 64–75 ms p50 and 158–173 ms p95. With file decode and the VAD gate included, the speech clips measured 99 ms p50 and 256 ms p95 through inference; recording, hotkey/UI, and insertion are excluded. The integrated VAD gate rejected all six silence controls while allowing all 61 speech clips through. These are development-set results, not a claim that Phonon is more accurate for every user's speech.
 
-The 164 MB Phonon download is real, and the same model checkpoint can run quickly with a lower-memory packed path. That does not mean every Phonon runtime uses less memory. On this M1 Pro, Detta’s default dense path peaked above Whisper; its packed path peaked below Whisper only after its conversion cache was present. The first conversion still used more memory than Whisper.
+The same app engine, VAD service, and transcript formatter used by WhisperMax were compiled into a temporary runner and exercised on the full private set for three passes. After changing VAD region-building to reuse its existing probability output, all 201 predictions exactly matched the pre-change run; all 61 speech clips passed the gate and all six silence controls were rejected. Compared with the checked-in pre-change service, all 67 clips also had identical preparation modes, speech-region boundaries, selected durations, and chunk windows; VAD inference calls fell from two per clip to one. The latest run scored 96 edits (8.23% WER). No audio or transcript data was added to Git.
 
-## What was tested
+The first model preparation on this Mac took 93.7 seconds while Core ML compiled the 10-second function. A later fresh process, with the compiled cache present, prepared and warmed it in 0.52 seconds. The cache directory occupied about 317 MB. Cold-start preparation is therefore a first-run UX cost; it should finish before WhisperMax reports Phonon ready. The earlier isolated Phonon runner measured a 173 MB app-process peak on the cold run and about 1.15 GB growth in the separate ANE compiler service; those are separate measurements and must not be added as if they were one process.
 
-The runs used a 16 GB M1 Pro on macOS 27.0. I inspected the signed Detta 1.0.21 bundle and replayed its bundled speech adapter headlessly without signing in. I also reran the public set with `fermion-research` 0.2.6 using canonical 16 kHz mono files. The hotkey-to-insertion path remains untested because the v2 results do not justify starting a Phonon integration.
+Keep Whisper as the default during this prototype. Phonon is now a strong fast, compact alternative, but Qwen3-ASR 1.7B 8-bit remains the accuracy leader on this set at 53 edits (4.55% WER) with materially higher memory use. Phonon also has weaker results than Whisper on the medium-length slice and the verified AirPods full-fan source. Review the error examples and validate the actual shortcut-to-insertion path before deciding whether either model should replace Whisper.
+
+The native adapter uses the official `phonon-coreml` package pinned at 1.1.1 and requires macOS 15. The model remains an opt-in local prototype; Whisper is still the normal backend.
+
+## Earlier evaluation — 2026-10-02
+
+The earlier playback-confirmed v2-only result kept Whisper as default: the tested Phonon paths made more word errors overall and materially more errors on twelve short takes. Phonon performed markedly better on two long takes, which account for 286 of the set's 538 words. Those earlier results were superseded as an integration gate by the larger v2–v4 plus AirPods set and fresh production Whisper rerun on 2026-10-08.
+
+## Historical setup and runtime comparison
+
+The runs used a 16 GB M1 Pro on macOS 27.0. I inspected the signed Detta 1.0.21 bundle and replayed its bundled speech adapter headlessly without signing in. I also reran the public set with `fermion-research` 0.2.6 using canonical 16 kHz mono files. That standalone runtime comparison predates the current native app prototype. At that point, the hotkey-to-insertion path had not been tested; current prototype validation is tracked below.
 
 The earlier external screen uses twenty short clips from separate Earnings-22 source recordings (1.26–15.28 seconds), with 301 reference words after normalization. It is a small, separate public check; the personal recordings are the primary accuracy set for this project.
 
@@ -91,10 +101,8 @@ The Detta bundle also includes a warm engine daemon and local cleanup model. Sta
 
 Inference speed alone does not say whether a hotkey activation contains speech or when speech has ended. On the four local silence/noise/cough controls, VAD rejected all four in 50–129 ms, while no-VAD Whisper emitted text for all four. Earlier no-VAD Phonon screening emitted text for the cough control and suppressed the other three.
 
-Keep VAD on the existing Whisper path. In v2, app VAD left Whisper WER unchanged, reduced CER by three characters, and rejected both room-noise controls. The Phonon VAD-window rerun still lost on short-form WER, so VAD does not change the adoption decision. The two controls are only a small check. Detta’s hold-to-talk behavior could replace some endpointing work by making the user define recording boundaries, but that would need a separate evaluation against false starts, silence, and cancellation in the real app.
+Whisper retains its current VAD preprocessing and fallback. Raw-audio experimental engines use VAD only to reject recordings without a credible speech region; they transcribe the original recording when the gate passes. If VAD itself is unavailable, the experimental path reports that error rather than sending unchecked audio to the recognizer. This small corpus has six silence controls, so it is only an initial false-positive check. The hotkey already defines the recording boundary; this VAD path is a post-stop gate, not live endpointing.
 
-## Next step
+## Current next step
 
-The v2 personal references have been playback-confirmed, and all candidate paths were scored on paired canonical files. The current evidence is a no-go for replacing Whisper: keep Whisper as the default, keep the audio and raw predictions out of Git, and reuse this fixed private set when a meaningfully improved Phonon runtime or model is available. No additional recording is needed for the current decision.
-
-Do not start the Phonon hotkey-to-insertion integration unless a future run clears the short-form accuracy gate. If that happens, test the actual capture, VAD, silence rejection, cancellation, repeated dictation, clipboard fallback, and offline restart path. For this personal-use stage, defer clean-account relocation, notarization, install accounting, and a physical macOS 14 machine.
+The native Phonon engine is implemented on `feat/phonon-asr` behind `WHISPERMAX_ASR_BACKEND=phonon-coreml-10s` and `WHISPERMAX_PHONON_MODEL=<model-folder>`. XcodeGen is the source of truth for its macOS 15 minimum and exact `phonon-coreml` 1.1.1 dependency. Whisper remains the default. The generated-project Debug and Release builds pass, and the integrated audio → VAD gate → Phonon → formatter runner passes all 67 local recordings for three repeats with unchanged Whisper preparation and Phonon predictions. The actual GUI hotkey, insertion, silence, cancellation, repeated-dictation, and quit/relaunch path still needs testing before this prototype can be recommended as a default; the first UI attempt was blocked because the macOS session was locked. Keep all private benchmark data and derived predictions in Yaplab's ignored local benchmark storage.
