@@ -10,7 +10,7 @@ The first model preparation on this Mac took 93.7 seconds while Core ML compiled
 
 Keep Whisper as the default during this prototype. Phonon is a strong fast, compact alternative, but the aggregate tie hides meaningful differences by clip type: it wins more often on short clips, loses on medium clips, and trails Whisper on the small AirPods/full-fan subset. Qwen3-ASR 1.7B 8-bit remains the accuracy leader on this set at 53 edits (4.55% WER), with a 5.12 GB process peak and text on all six silence controls before VAD. Review the paired errors and validate the actual shortcut-to-insertion path before deciding whether any alternative should replace Whisper.
 
-The native adapter uses the official `phonon-coreml` package pinned at 1.1.1 and requires macOS 15. The model remains an opt-in local prototype; Whisper is still the normal backend.
+The native adapter uses the official `phonon-coreml` package pinned at 1.1.2 and requires macOS 15. The model remains an opt-in local prototype; Whisper is still the normal backend.
 
 ### Paired take-level results — 2026-10-08
 
@@ -122,4 +122,4 @@ Whisper retains its current VAD preprocessing and fallback. Raw-audio experiment
 
 ## Current next step
 
-The native Phonon engine is implemented on `feat/phonon-asr` behind `WHISPERMAX_ASR_BACKEND=phonon-coreml-10s` and `WHISPERMAX_PHONON_MODEL=<model-folder>`. XcodeGen is the source of truth for its macOS 15 minimum and exact `phonon-coreml` 1.1.1 dependency. Whisper remains the default. The generated-project Debug and Release builds pass, and the integrated audio → VAD gate → Phonon → formatter runner passes all 67 local recordings for three repeats with unchanged Whisper preparation and Phonon predictions. The actual GUI hotkey, insertion, silence, cancellation, repeated-dictation, and quit/relaunch path still needs testing before this prototype can be recommended as a default; the first UI attempt was blocked because the macOS session was locked. Keep all private benchmark data and derived predictions in Yaplab's ignored local benchmark storage.
+The native Phonon engine is implemented on `feat/phonon-asr` behind `WHISPERMAX_ASR_BACKEND=phonon-coreml-10s` and `WHISPERMAX_PHONON_MODEL=<model-folder>`. XcodeGen is the source of truth for its macOS 15 minimum and exact `phonon-coreml` 1.1.2 dependency. Whisper remains the default. The generated-project Debug and Release builds pass, and the integrated audio → VAD gate → Phonon → formatter runner passes all 67 local recordings for three repeats with unchanged Whisper preparation and Phonon predictions. The actual GUI hotkey, insertion, silence, cancellation, repeated-dictation, and quit/relaunch path still needs testing before this prototype can be recommended as a default; the first UI attempt was blocked because the macOS session was locked. Keep all private benchmark data and derived predictions in Yaplab's ignored local benchmark storage.

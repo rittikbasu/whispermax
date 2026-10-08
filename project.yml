@@ -21,7 +21,7 @@ settings:
 packages:
   PhononCoreML:
     url: https://github.com/fermionresearch/phonon-coreml
-    exactVersion: 1.1.1
+    exactVersion: 1.1.2
   Sparkle:
     url: https://github.com/sparkle-project/Sparkle
     from: 2.9.1

@@ -6,8 +6,8 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/fermionresearch/phonon-coreml",
       "state" : {
-        "revision" : "464ae57460fed61d4feb6f2a7424b5be1213accb",
-        "version" : "1.1.1"
+        "revision" : "67f40145ab75fa0666bef76854ab08c838bfe8eb",
+        "version" : "1.1.2"
       }
     },
     {
