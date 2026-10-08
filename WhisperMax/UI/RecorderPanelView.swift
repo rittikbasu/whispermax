@@ -382,12 +382,7 @@ private struct RecorderActionStrip: View {
                 .fill(Color.white.opacity(0.11))
                 .frame(width: 1, height: 20)
 
-            Button(action: cancel) {
-                HStack(spacing: 8) {
-                    Text("Cancel")
-                    RecorderKeyBadge(text: "Esc")
-                }
-            }
+            Button("Cancel", action: cancel)
             .buttonStyle(RecorderRailButtonStyle(weight: .medium, color: .white.opacity(0.50)))
         }
         .frame(height: 38)
@@ -398,12 +393,7 @@ private struct RecorderCancelAction: View {
     let cancel: () -> Void
 
     var body: some View {
-        Button(action: cancel) {
-            HStack(spacing: 8) {
-                Text("Cancel")
-                RecorderKeyBadge(text: "Esc")
-            }
-        }
+        Button("Cancel", action: cancel)
         .buttonStyle(RecorderRailButtonStyle(weight: .medium, color: .white.opacity(0.62)))
         .frame(height: 38)
     }

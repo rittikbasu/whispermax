@@ -73,16 +73,11 @@ extension PreparedTranscriptionAudio {
     }
 }
 
-/// Post-stop speech activity analysis.
+/// Post-stop speech detection and offline transcription-window preparation.
 ///
-/// Design goals:
-/// - VAD remains post-stop only; start/stop is still explicit.
-/// - Short clips stay simple: trim once, transcribe once.
-/// - Longer clips prioritize reliability over trimming: if VAD found credible speech
-///   anywhere in the recording, prefer a full-buffer Whisper pass so later/softer
-///   words are not lost at VAD boundaries.
-/// - Chunked transcription is an extreme long-form fallback only.
-/// - If VAD is unavailable, fall back to a single-pass whisper decode instead of blocking.
+/// The product path uses VAD only as a post-stop speech gate and passes the original
+/// recording to the selected engine. The window-preparation methods remain for the
+/// offline Whisper comparison harness.
 actor SpeechActivityService {
     private final class Context: @unchecked Sendable {
         let pointer: OpaquePointer
