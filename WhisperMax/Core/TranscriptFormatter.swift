@@ -2,7 +2,7 @@ import Foundation
 
 enum TranscriptFormatter {
     static func normalize(_ text: String, preferredTerms: [String] = []) -> String {
-        let withoutNonSpeechCaptions = removeWhisperSoundEffectCaptions(from: text)
+        let withoutNonSpeechCaptions = removeAsteriskedCaptions(from: text)
 
         let collapsed = withoutNonSpeechCaptions.replacingOccurrences(
             of: "\\s+",
@@ -116,7 +116,7 @@ enum TranscriptFormatter {
         .trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
-    private static func removeWhisperSoundEffectCaptions(from text: String) -> String {
+    private static func removeAsteriskedCaptions(from text: String) -> String {
         guard let expression = try? NSRegularExpression(
             pattern: "\\*[^*\\n]{1,48}\\*",
             options: []

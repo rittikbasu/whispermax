@@ -36,22 +36,30 @@ actor PhononCoreMLEngine: SpeechTranscriptionEngine {
         options.computeUnits = .cpuAndNeuralEngine
         options.functions = [10]
         options.eagerFunctions = [10]
-        options.singleShotMaxSeconds = 10
+        // Phonon's mel window adds 20 ms before selecting the encoder function.
+        options.singleShotMaxSeconds = 9.98
         options.windowSeconds = 10
 
         let candidate = try Transcriber(bundle: configuration.modelURL, options: options)
         try Task.checkCancellation()
-        _ = try candidate.transcribe([Float](repeating: 0, count: 10 * 16_000))
+        _ = try candidate.transcribe(Self.warmUpSamples)
         try Task.checkCancellation()
         transcriber = candidate
     }
 
-    func transcribe(
-        input: SpeechTranscriptionInput,
-        prompt _: String?,
-        includeTokenDiagnostics _: Bool,
-        maxTokens _: Int
-    ) async throws -> SpeechTranscriptionOutput {
+    private static let warmUpSamples: [Float] = {
+        let sampleRate = 16_000.0
+        let duration = 1.0
+        let sampleCount = Int(sampleRate * duration)
+        return (0..<sampleCount).map { index in
+            let time = Double(index) / sampleRate
+            let fundamental = sin(2 * .pi * 180 * time)
+            let harmonic = sin(2 * .pi * 360 * time) * 0.35
+            return Float((fundamental + harmonic) * 0.08)
+        }
+    }()
+
+    func transcribe(input: SpeechTranscriptionInput, prompt _: String?) async throws -> SpeechTranscriptionOutput {
         try Task.checkCancellation()
         guard let transcriber else { throw EngineError.notPrepared }
         guard case .originalAudio(let url) = input else { throw EngineError.originalAudioRequired }
@@ -63,7 +71,6 @@ actor PhononCoreMLEngine: SpeechTranscriptionEngine {
 
         return SpeechTranscriptionOutput(
             text: result.text,
-            whisperDiagnostics: nil,
             inferenceDuration: elapsed
         )
     }

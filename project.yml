@@ -33,8 +33,8 @@ targets:
       - path: WhisperMax
         excludes:
           - "**/__pycache__/**"
-    resources:
-      - path: WhisperMax/Resources/qwen_mlx_worker.py
+          - "Core/TranscriptionChunkPolicy.swift"
+          - "Transcription/WhisperEngine.swift"
     dependencies:
       - package: PhononCoreML
       - package: Sparkle

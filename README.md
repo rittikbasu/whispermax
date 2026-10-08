@@ -34,11 +34,11 @@ whispermax is my attempt at the sharper version of this product:
 ## what it does
 
 - records locally on macos with a global hotkey
-- transcribes on-device with `whisper.cpp` and `ggml-large-v3-turbo`
+- transcribes on-device with Phonon-2 on Apple's Neural Engine
 - inserts text into the focused app
 - falls back to clipboard when insertion cannot be trusted
 - keeps a simple local transcript history
-- includes a word dictionary for names, product terms, and phrases whispermax tends to miss
+- includes a local dictionary that preserves preferred capitalization for recognized terms
 - stays lightweight and focused instead of trying to be an everything app
 
 ## why whispermax exists
@@ -73,7 +73,7 @@ because this app is currently **not notarized**, macos may block it on first lau
 
 #### requirements
 
-- macos 14+
+- macos 15+ on Apple silicon
 - xcode
 - [xcodegen](https://github.com/yonaskolb/XcodeGen)
 
@@ -86,7 +86,7 @@ because this app is currently **not notarized**, macos may block it on first lau
    cd whispermax
    ```
 
-2. install the whisper framework:
+2. install the audio and speech activity framework:
 
    ```bash
    ./Scripts/install-whisper-framework.sh
@@ -110,17 +110,17 @@ the dev script installs the latest debug build into `~/Applications/whispermax.a
 
 on first launch, whispermax walks you through three things:
 
-1. speech model setup
+1. download and prepare the 345 MB Phonon-2 model
 2. permissions
 3. hotkey setup
 
-if superwhisper is already installed on your mac and its local model is present, whispermax will try to **hardlink** that model instantly instead of making you download the same file again.
+The model is stored locally in Application Support. First launch may take a little longer while Core ML prepares it for your Mac.
 
 ## how it works
 
-- the core transcription path is built around `whisper.cpp`
-- the local speech model is `ggml-large-v3-turbo.bin`
-- transcription runs on-device
+- Phonon-2 Core ML performs local speech recognition using the Neural Engine
+- Silero VAD rejects recordings without speech before recognition
+- the audio and transcript stay on your Mac
 - insertion tries the most reliable path for the current app surface
 - browser-family apps use a paste-first path
 - native text fields use a stricter direct insertion path when possible

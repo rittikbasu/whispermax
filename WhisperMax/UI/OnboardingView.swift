@@ -312,20 +312,19 @@ private struct DownloadCard: View {
 
     private var downloadStatusText: String {
         if controller.downloadError != nil { return "Download failed" }
-        if controller.isDownloadComplete {
-            return controller.modelSource == .superwhisper
-                ? "Model found on your Mac"
-                : "Speech model ready"
-        }
+        if controller.isDownloadComplete { return "Speech model ready" }
         return "Downloading speech model\u{2026}"
     }
 
     private var downloadSizeText: String {
-        let downloaded = controller.downloadProgress * 1624
-        if controller.isDownloadComplete {
-            return "1.6 GB"
-        }
-        return String(format: "%.0f MB / 1.6 GB", downloaded)
+        let total = PhononModelPackage.totalByteCount
+        let downloaded = Int64(controller.downloadProgress * Double(total))
+        let formatter = ByteCountFormatter()
+        formatter.allowedUnits = [.useMB, .useGB]
+        formatter.countStyle = .file
+        return controller.isDownloadComplete
+            ? formatter.string(fromByteCount: total)
+            : "\(formatter.string(fromByteCount: downloaded)) / \(formatter.string(fromByteCount: total))"
     }
 }
 

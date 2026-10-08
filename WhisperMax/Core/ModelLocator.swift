@@ -21,6 +21,12 @@ enum ModelLocator {
     static let modelsDirectory = appSupportDirectory.appendingPathComponent("Models", isDirectory: true)
     static let legacyTemporaryRecordingsDirectory = appSupportDirectory.appendingPathComponent("Recordings", isDirectory: true)
     static let temporaryRecordingsDirectory = cacheDirectory.appendingPathComponent("Recordings", isDirectory: true)
+    static let phononModelURL = modelsDirectory.appendingPathComponent("Phonon-2-CoreML", isDirectory: true)
+    static let phononStagingModelURL = modelsDirectory.appendingPathComponent(".Phonon-2-CoreML.partial", isDirectory: true)
+    static let phononDownloadResumeDataURL = appSupportDirectory.appendingPathComponent("phonon-model-download.resumedata")
+    static let phononDownloadResumeAssetURL = appSupportDirectory.appendingPathComponent("phonon-model-download.asset")
+
+    // Retained for the private Whisper comparison harness; the app no longer loads this recognizer.
     static let appLocalModelURL = modelsDirectory.appendingPathComponent("ggml-large-v3-turbo.bin")
 
     static let superwhisperModelURL: URL = {
@@ -72,6 +78,10 @@ enum ModelLocator {
         }
 
         return nil
+    }
+
+    static var hasInstalledPhononModel: Bool {
+        PhononModelPackage.isInstalled(at: phononModelURL)
     }
 
     static func bundledVADModelURL(in bundle: Bundle = .main) -> URL? {

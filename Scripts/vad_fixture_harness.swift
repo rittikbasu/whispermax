@@ -59,6 +59,7 @@ private struct VADFixtureHarness {
         let modelLoadMilliseconds = (ProcessInfo.processInfo.systemUptime - modelLoadStart) * 1_000
         print(String(format: "model load: %.0f ms", modelLoadMilliseconds))
         let speechActivityService = SpeechActivityService(modelURL: vadModelURL)
+        _ = await speechActivityService.prepare()
 
         for fixtureURL in fixturePaths {
             do {
@@ -142,7 +143,7 @@ private struct VADFixtureHarness {
                 chunks: []
             )
         }
-        let prepared = speechActivityService.prepareTranscriptionAudio(from: samples)
+        let prepared = await speechActivityService.prepareTranscriptionAudio(from: samples)
 
         switch prepared {
         case .noSpeech(let diagnostics):

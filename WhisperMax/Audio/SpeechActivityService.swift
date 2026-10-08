@@ -40,7 +40,7 @@ struct SpeechActivityDiagnostics: Sendable {
     let selectedDuration: TimeInterval
 }
 
-enum PreparedTranscriptionAudio {
+enum PreparedTranscriptionAudio: Sendable {
     case noSpeech(SpeechActivityDiagnostics)
     case singlePass(samples: [Float], diagnostics: SpeechActivityDiagnostics)
     case chunked(chunks: [SpeechChunk], diagnostics: SpeechActivityDiagnostics)
@@ -83,7 +83,19 @@ extension PreparedTranscriptionAudio {
 ///   words are not lost at VAD boundaries.
 /// - Chunked transcription is an extreme long-form fallback only.
 /// - If VAD is unavailable, fall back to a single-pass whisper decode instead of blocking.
-final class SpeechActivityService {
+actor SpeechActivityService {
+    private final class Context: @unchecked Sendable {
+        let pointer: OpaquePointer
+
+        init(pointer: OpaquePointer) {
+            self.pointer = pointer
+        }
+
+        deinit {
+            whisper_vad_free(pointer)
+        }
+    }
+
     private enum Tuning {
         static let minSpeechDurationMS = 90.0
         static let minSilenceDurationMS = 500.0
@@ -116,17 +128,18 @@ final class SpeechActivityService {
     }
 
     private let modelURL: URL?
-    private var vadContext: OpaquePointer?
+    private var vadContext: Context?
     private var hasAttemptedContextLoad = false
 
     init(modelURL: URL? = ModelLocator.bundledVADModelURL()) {
         self.modelURL = modelURL
     }
 
-    deinit {
-        if let vadContext {
-            whisper_vad_free(vadContext)
+    func prepare() -> Bool {
+        if vadContext == nil {
+            hasAttemptedContextLoad = false
         }
+        return loadContextIfPossible() != nil
     }
 
     func prepareTranscriptionAudio(from audioURL: URL) throws -> PreparedTranscriptionAudio {
@@ -267,13 +280,13 @@ final class SpeechActivityService {
     }
 
     private func detectedSpeechRegions(in samples: [Float]) -> [SpeechRegion]? {
-        guard let vadContext = loadContextIfPossible() else {
+        guard let context = loadContextIfPossible() else {
             return nil
         }
 
-        let probabilities = detectSpeechProbabilities(context: vadContext, samples: samples)
+        let probabilities = detectSpeechProbabilities(context: context.pointer, samples: samples)
         guard let rawRegions = buildSpeechRegions(
-            context: vadContext,
+            context: context.pointer,
             samples: samples,
             probabilities: probabilities
         ) else {
@@ -549,7 +562,7 @@ final class SpeechActivityService {
         )
     }
 
-    private func loadContextIfPossible() -> OpaquePointer? {
+    private func loadContextIfPossible() -> Context? {
         if let vadContext {
             return vadContext
         }
@@ -569,7 +582,10 @@ final class SpeechActivityService {
         params.use_gpu = false
         params.gpu_device = 0
 
-        vadContext = whisper_vad_init_from_file_with_params(modelURL.path, params)
+        guard let pointer = whisper_vad_init_from_file_with_params(modelURL.path, params) else {
+            return nil
+        }
+        vadContext = Context(pointer: pointer)
         return vadContext
     }
 }

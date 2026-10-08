@@ -222,9 +222,7 @@ actor WhisperEngine: SpeechTranscriptionEngine {
 
     func transcribe(
         input: SpeechTranscriptionInput,
-        prompt: String?,
-        includeTokenDiagnostics: Bool,
-        maxTokens _: Int
+        prompt: String?
     ) async throws -> SpeechTranscriptionOutput {
         let samples: [Float]
         switch input {
@@ -237,11 +235,10 @@ actor WhisperEngine: SpeechTranscriptionEngine {
         let result = try await transcribe(
             samples: samples,
             prompt: prompt,
-            includeTokenDiagnostics: includeTokenDiagnostics
+            includeTokenDiagnostics: false
         )
         return SpeechTranscriptionOutput(
             text: result.text,
-            whisperDiagnostics: result,
             inferenceDuration: nil
         )
     }

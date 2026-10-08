@@ -16,7 +16,9 @@ swiftc -O \
   -framework Foundation \
   -o "$OUT" \
   "$ROOT_DIR/WhisperMax/Core/ModelLocator.swift" \
+  "$ROOT_DIR/WhisperMax/Core/PhononModelPackage.swift" \
   "$ROOT_DIR/WhisperMax/Core/WordDictionaryStore.swift" \
+  "$ROOT_DIR/WhisperMax/Transcription/SpeechTranscriptionEngine.swift" \
   "$ROOT_DIR/WhisperMax/Audio/AudioSampleDecoder.swift" \
   "$ROOT_DIR/WhisperMax/Audio/SpeechActivityService.swift" \
   "$ROOT_DIR/WhisperMax/Core/TranscriptFormatter.swift" \
