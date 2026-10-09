@@ -83,22 +83,26 @@ final class TextInsertionService {
         )
     }
 
-    func insert(_ text: String, target: InsertionTargetContext? = nil) async -> InsertionMethod {
+    func insert(_ text: String, target: InsertionTargetContext? = nil) async throws -> InsertionMethod {
+        try Task.checkCancellation()
         let resolvedTarget = target ?? captureTargetContext()
         let browserTarget = isBrowserTarget(resolvedTarget)
         let webRuntimeTarget = isWebRuntimeTarget(resolvedTarget)
-        let targetPrepared = await prepareTargetForInsertion(
+        let targetPrepared = try await prepareTargetForInsertion(
             resolvedTarget,
             prefersWebFocusRestore: browserTarget || webRuntimeTarget
         )
+        try Task.checkCancellation()
         var focusSnapshot = targetPrepared ? captureFocusedElementSnapshot() : nil
         if targetPrepared,
            webRuntimeTarget,
            !focusSnapshotLooksLikeTextInsertionTarget(focusSnapshot) {
-            if await enableExpandedAccessibilityTreeIfAvailable(for: resolvedTarget) {
+            if try await enableExpandedAccessibilityTreeIfAvailable(for: resolvedTarget) {
+                try Task.checkCancellation()
                 focusSnapshot = captureFocusedElementSnapshot()
             }
         }
+        try Task.checkCancellation()
         let surface = surfaceKind(
             browserTarget: browserTarget,
             webRuntimeTarget: webRuntimeTarget,
@@ -106,12 +110,13 @@ final class TextInsertionService {
         )
 
         if shouldTryAccessibility(for: resolvedTarget, surface: surface) {
-            if await tryInsertViaAccessibility(text) {
+            try Task.checkCancellation()
+            if try tryInsertViaAccessibility(text) {
                 return .accessibility
             }
         }
 
-        let pasteOutcome = await pasteViaClipboard(
+        let pasteOutcome = try await pasteViaClipboard(
             text,
             targetPrepared: targetPrepared,
             referenceSnapshot: focusSnapshot,
@@ -125,9 +130,8 @@ final class TextInsertionService {
         return .copied
     }
 
-    private func tryInsertViaAccessibility(
-        _ text: String
-    ) async -> Bool {
+    private func tryInsertViaAccessibility(_ text: String) throws -> Bool {
+        try Task.checkCancellation()
         let options = ["AXTrustedCheckOptionPrompt": false] as CFDictionary
         guard AXIsProcessTrusted() || AXIsProcessTrustedWithOptions(options) else {
             return false
@@ -171,15 +175,18 @@ final class TextInsertionService {
         targetPrepared: Bool,
         referenceSnapshot: FocusedElementSnapshot?,
         settleDelayMilliseconds: UInt64 = 90
-    ) async -> PasteDispatchOutcome {
-        copyToClipboard(text)
+    ) async throws -> PasteDispatchOutcome {
         let focusedTextTarget = focusSnapshotLooksLikeTextInsertionTarget(referenceSnapshot)
 
         guard targetPrepared else {
+            try Task.checkCancellation()
+            copyToClipboard(text)
             return PasteDispatchOutcome(dispatched: false, focusedTextTarget: false)
         }
 
-        try? await Task.sleep(for: .milliseconds(settleDelayMilliseconds))
+        try await Task.sleep(for: .milliseconds(settleDelayMilliseconds))
+        try Task.checkCancellation()
+        copyToClipboard(text)
 
         guard sendCommandV() else {
             return PasteDispatchOutcome(dispatched: false, focusedTextTarget: false)
@@ -231,7 +238,7 @@ final class TextInsertionService {
     private func prepareTargetForInsertion(
         _ target: InsertionTargetContext?,
         prefersWebFocusRestore: Bool = false
-    ) async -> Bool {
+    ) async throws -> Bool {
         guard let target else {
             return true
         }
@@ -245,13 +252,14 @@ final class TextInsertionService {
         }
 
         _ = app.activate()
-        try? await Task.sleep(for: .milliseconds(prefersWebFocusRestore ? 140 : 90))
+        try await Task.sleep(for: .milliseconds(prefersWebFocusRestore ? 140 : 90))
+        try Task.checkCancellation()
         return NSWorkspace.shared.frontmostApplication?.processIdentifier == target.processIdentifier
     }
 
     private func enableExpandedAccessibilityTreeIfAvailable(
         for target: InsertionTargetContext?
-    ) async -> Bool {
+    ) async throws -> Bool {
         guard AXIsProcessTrusted() else {
             return false
         }
@@ -288,7 +296,8 @@ final class TextInsertionService {
         }
 
         accessibilityTreeEnabledTargets.insert(key)
-        try? await Task.sleep(for: .milliseconds(100))
+        try await Task.sleep(for: .milliseconds(100))
+        try Task.checkCancellation()
         return true
     }
 

@@ -23,7 +23,19 @@ struct TranscriptionResult: Sendable {
     let segmentDiagnostics: [TranscriptionSegmentDiagnostic]?
 }
 
-actor WhisperEngine {
+private final class WhisperContext {
+    let pointer: OpaquePointer
+
+    init(pointer: OpaquePointer) {
+        self.pointer = pointer
+    }
+
+    deinit {
+        whisper_free(pointer)
+    }
+}
+
+actor WhisperEngine: SpeechTranscriptionEngine {
     enum EngineError: LocalizedError {
         case initializationFailed
         case transcriptionFailed
@@ -41,13 +53,13 @@ actor WhisperEngine {
     private static let noSpeechSegmentThreshold: Float = 0.80
 
     private let modelURL: URL
-    private var context: OpaquePointer?
+    private var context: WhisperContext?
 
     init(modelURL: URL) {
         self.modelURL = modelURL
     }
 
-    func prepare() throws {
+    func prepare() async throws {
         guard context == nil else {
             return
         }
@@ -55,21 +67,21 @@ actor WhisperEngine {
         var parameters = whisper_context_default_params()
         parameters.flash_attn = true
 
-        guard let context = whisper_init_from_file_with_params(modelURL.path, parameters) else {
+        guard let pointer = whisper_init_from_file_with_params(modelURL.path, parameters) else {
             throw EngineError.initializationFailed
         }
 
-        self.context = context
+        context = WhisperContext(pointer: pointer)
     }
 
     func transcribe(
         samples: [Float],
         prompt: String? = nil,
         includeTokenDiagnostics: Bool = false
-    ) throws -> TranscriptionResult {
-        try prepare()
+    ) async throws -> TranscriptionResult {
+        try await prepare()
 
-        guard let context else {
+        guard let context = context?.pointer else {
             throw EngineError.initializationFailed
         }
 
@@ -206,5 +218,32 @@ actor WhisperEngine {
             segmentCount: segmentCount,
             segmentDiagnostics: includeTokenDiagnostics ? segmentDiagnostics : nil
         )
+    }
+
+    func transcribe(
+        input: SpeechTranscriptionInput,
+        prompt: String?
+    ) async throws -> SpeechTranscriptionOutput {
+        let samples: [Float]
+        switch input {
+        case .preparedSamples(let preparedSamples):
+            samples = preparedSamples
+        case .originalAudio(let url):
+            samples = try AudioSampleDecoder.decodeWhisperSamples(from: url)
+        }
+
+        let result = try await transcribe(
+            samples: samples,
+            prompt: prompt,
+            includeTokenDiagnostics: false
+        )
+        return SpeechTranscriptionOutput(
+            text: result.text,
+            inferenceDuration: nil
+        )
+    }
+
+    func shutdown() async {
+        context = nil
     }
 }

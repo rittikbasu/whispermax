@@ -25,11 +25,6 @@ struct DebugRecordingTranscriptionPass: Codable, Sendable {
     let accepted: Bool
     let transcript: String
     let selectedDuration: TimeInterval?
-    let averageNoSpeechProbability: Float
-    let maxNoSpeechProbability: Float
-    let averageTokenProbability: Float
-    let segmentCount: Int
-    let segmentDiagnostics: [TranscriptionSegmentDiagnostic]
 }
 
 struct DebugRecordingSpeechRegion: Codable, Sendable {
@@ -236,11 +231,6 @@ struct DebugRecordingTranscriptionPass: Sendable {
     let accepted: Bool
     let transcript: String
     let selectedDuration: TimeInterval?
-    let averageNoSpeechProbability: Float
-    let maxNoSpeechProbability: Float
-    let averageTokenProbability: Float
-    let segmentCount: Int
-    let segmentDiagnostics: [TranscriptionSegmentDiagnostic]
 }
 
 final class DebugRecordingStore {

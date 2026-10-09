@@ -1,0 +1,24 @@
+{
+  "originHash" : "9565383ea0b06bf9fe16884da078c2bd88df19c1c8ce0133fb9e9858379d3e0d",
+  "pins" : [
+    {
+      "identity" : "phonon-coreml",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/fermionresearch/phonon-coreml",
+      "state" : {
+        "revision" : "67f40145ab75fa0666bef76854ab08c838bfe8eb",
+        "version" : "1.1.2"
+      }
+    },
+    {
+      "identity" : "sparkle",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/sparkle-project/Sparkle",
+      "state" : {
+        "revision" : "066e75a8b3e99962685d6a90cdd5293ebffd9261",
+        "version" : "2.9.1"
+      }
+    }
+  ],
+  "version" : 3
+}

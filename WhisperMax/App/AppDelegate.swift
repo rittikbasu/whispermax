@@ -7,6 +7,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private var hotkeyMonitor: GlobalHotkeyMonitor?
     private var recorderPanelController: RecorderPanelController?
+    private var terminationTask: Task<Void, Never>?
 
     override init() {
         controller = AppController(updateController: updateController)
@@ -41,8 +42,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         controller.refreshUpdateState()
     }
 
-    func applicationWillTerminate(_ notification: Notification) {
+    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
         hotkeyMonitor?.stop()
         controller.pauseModelDownload()
+        controller.cancelRecording()
+
+        guard terminationTask == nil else { return .terminateLater }
+        let controller = controller
+        terminationTask = Task { @MainActor [weak self] in
+            await controller.shutdownTranscriptionEngineAndWait()
+            self?.terminationTask = nil
+            NSApp.reply(toApplicationShouldTerminate: true)
+        }
+        return .terminateLater
+    }
+
+    func applicationWillTerminate(_ notification: Notification) {
+        hotkeyMonitor?.stop()
     }
 }

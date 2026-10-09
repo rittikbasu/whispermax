@@ -1,6 +1,13 @@
 @preconcurrency import AVFoundation
 import Foundation
 
+struct DebugRecordingChunkPlan: Sendable {
+    let startSample: Int
+    let endSample: Int
+    let overlapLeadSamples: Int
+    let overlapTrailSamples: Int
+}
+
 private enum HarnessError: Error, LocalizedError {
     case missingModels
     case invalidPath(String)
@@ -8,7 +15,7 @@ private enum HarnessError: Error, LocalizedError {
     var errorDescription: String? {
         switch self {
         case .missingModels:
-            return "usage: vad_fixture_harness <whisper-model.bin> <vad-model.bin> [fixture path ...]"
+            return "usage: vad_fixture_harness <whisper-model.bin> <vad-model.bin> [--no-vad] [fixture path ...]"
         case .invalidPath(let path):
             return "Invalid fixture path: \(path)"
         }
@@ -38,21 +45,39 @@ private struct VADFixtureHarness {
 
         let whisperModelURL = URL(fileURLWithPath: arguments[0])
         let vadModelURL = URL(fileURLWithPath: arguments[1])
-        let fixtureArguments = Array(arguments.dropFirst(2))
+        let requestedFixtures = Array(arguments.dropFirst(2))
+        let usesVAD = requestedFixtures.first != "--no-vad"
+        let fixtureArguments = usesVAD ? requestedFixtures : Array(requestedFixtures.dropFirst())
         let fixturePaths = try resolveFixturePaths(from: fixtureArguments)
 
         let whisperEngine = WhisperEngine(modelURL: whisperModelURL)
+        let dictionaryEntries = WordDictionaryStore().load()
+        let preferredTerms = dictionaryEntries.map(\.text)
+        let transcriptionPrompt = preferredTranscriptionPrompt(from: dictionaryEntries)
+        let modelLoadStart = ProcessInfo.processInfo.systemUptime
         try await whisperEngine.prepare()
+        let modelLoadMilliseconds = (ProcessInfo.processInfo.systemUptime - modelLoadStart) * 1_000
+        print(String(format: "model load: %.0f ms", modelLoadMilliseconds))
         let speechActivityService = SpeechActivityService(modelURL: vadModelURL)
+        _ = await speechActivityService.prepare()
 
         for fixtureURL in fixturePaths {
             do {
+                let processingStart = ProcessInfo.processInfo.systemUptime
                 let result = try await runFixture(
                     at: fixtureURL,
+                    usesVAD: usesVAD,
                     speechActivityService: speechActivityService,
-                    whisperEngine: whisperEngine
+                    whisperEngine: whisperEngine,
+                    transcriptionPrompt: transcriptionPrompt,
+                    preferredTerms: preferredTerms
                 )
-                print(renderFixtureOutput(for: fixtureURL, result: result))
+                let processingMilliseconds = (ProcessInfo.processInfo.systemUptime - processingStart) * 1_000
+                print(renderFixtureOutput(
+                    for: fixtureURL,
+                    result: result,
+                    processingMilliseconds: processingMilliseconds
+                ))
             } catch {
                 print("[\(fixtureURL.lastPathComponent)] ERROR: \(error.localizedDescription)")
             }
@@ -95,11 +120,30 @@ private struct VADFixtureHarness {
 
     private static func runFixture(
         at url: URL,
+        usesVAD: Bool,
         speechActivityService: SpeechActivityService,
-        whisperEngine: WhisperEngine
+        whisperEngine: WhisperEngine,
+        transcriptionPrompt: String?,
+        preferredTerms: [String]
     ) async throws -> HarnessResult {
         let samples = try AudioSampleDecoder.decodeWhisperSamples(from: url)
-        let prepared = speechActivityService.prepareTranscriptionAudio(from: samples)
+        guard usesVAD else {
+            let transcription = try await whisperEngine.transcribe(samples: samples, prompt: transcriptionPrompt)
+            let cleaned = TranscriptFormatter.normalize(transcription.text, preferredTerms: preferredTerms)
+            let duration = Double(samples.count) / AudioSampleDecoder.targetSampleRate
+            return HarnessResult(
+                transcript: cleaned.isEmpty ? nil : cleaned,
+                diagnostics: SpeechActivityDiagnostics(
+                    mode: .bypass,
+                    originalDuration: duration,
+                    speechRegions: [],
+                    totalSpeechDuration: 0,
+                    selectedDuration: duration
+                ),
+                chunks: []
+            )
+        }
+        let prepared = await speechActivityService.prepareTranscriptionAudio(from: samples)
 
         switch prepared {
         case .noSpeech(let diagnostics):
@@ -109,24 +153,39 @@ private struct VADFixtureHarness {
                 chunks: []
             )
         case .singlePass(let trimmedSamples, let diagnostics):
-            let transcription = try await whisperEngine.transcribe(samples: trimmedSamples, prompt: nil)
-            let cleaned = TranscriptFormatter.normalize(transcription.text)
+            let transcription = try await whisperEngine.transcribe(
+                samples: trimmedSamples,
+                prompt: transcriptionPrompt
+            )
+            let cleaned = TranscriptFormatter.normalize(transcription.text, preferredTerms: preferredTerms)
+            let shouldReject = cleaned.isEmpty || TranscriptionChunkPolicy.shouldRejectSinglePass(
+                result: transcription,
+                text: cleaned,
+                selectedDuration: Double(trimmedSamples.count) / AudioSampleDecoder.targetSampleRate,
+                mode: diagnostics.mode
+            )
             return HarnessResult(
-                transcript: cleaned.isEmpty ? nil : cleaned,
+                transcript: shouldReject ? nil : cleaned,
                 diagnostics: diagnostics,
                 chunks: []
             )
         case .chunked(let chunks, let diagnostics):
             var chunkTexts: [String] = []
             chunkTexts.reserveCapacity(chunks.count)
-            var rollingContext = ""
+            var rollingContext = transcriptionPrompt ?? ""
 
             for chunk in chunks {
                 let transcription = try await whisperEngine.transcribe(
                     samples: chunk.samples,
-                    prompt: composeChunkPrompt(rollingContext: rollingContext)
+                    prompt: composeChunkPrompt(
+                        basePrompt: transcriptionPrompt,
+                        rollingContext: rollingContext
+                    )
                 )
-                let cleaned = TranscriptFormatter.normalize(transcription.text)
+                let cleaned = TranscriptFormatter.normalize(
+                    transcription.text,
+                    preferredTerms: preferredTerms
+                )
                 guard !cleaned.isEmpty else {
                     continue
                 }
@@ -137,7 +196,7 @@ private struct VADFixtureHarness {
                 rollingContext = updatedChunkContext(from: chunkTexts)
             }
 
-            let stitched = TranscriptFormatter.stitch(chunkTexts)
+            let stitched = TranscriptFormatter.stitch(chunkTexts, preferredTerms: preferredTerms)
             return HarnessResult(
                 transcript: stitched.isEmpty ? nil : stitched,
                 diagnostics: diagnostics,
@@ -146,10 +205,14 @@ private struct VADFixtureHarness {
         }
     }
 
-    private static func renderFixtureOutput(for url: URL, result: HarnessResult) -> String {
+    private static func renderFixtureOutput(
+        for url: URL,
+        result: HarnessResult,
+        processingMilliseconds: Double
+    ) -> String {
         var lines: [String] = []
         let duration = result.diagnostics.originalDuration
-        lines.append("[\(url.lastPathComponent)] \(String(format: "%.2fs", duration)) mode=\(result.diagnostics.mode.rawValue)")
+        lines.append("[\(url.lastPathComponent)] \(String(format: "%.2fs", duration)) mode=\(result.diagnostics.mode.rawValue) processing=\(String(format: "%.0f", processingMilliseconds))ms")
         lines.append("  speech regions: \(formatRegions(result.diagnostics.speechRegions))")
         if !result.chunks.isEmpty {
             lines.append("  chunks: \(formatChunks(result.chunks))")
@@ -247,9 +310,43 @@ private struct VADFixtureHarness {
             .map(String.init)
     }
 
-    private static func composeChunkPrompt(rollingContext: String) -> String? {
+    private static func preferredTranscriptionPrompt(from entries: [WordDictionaryEntry]) -> String? {
+        var selectedTerms: [String] = []
+        var characterBudget = 0
+        let orderedTerms = entries.sorted { $0.createdAt > $1.createdAt }.map(\.text)
+
+        for term in orderedTerms {
+            let separatorCost = selectedTerms.isEmpty ? 0 : 2
+            let nextCost = characterBudget + separatorCost + term.count
+            guard nextCost <= 320 else {
+                break
+            }
+
+            selectedTerms.append(term)
+            characterBudget = nextCost
+        }
+
+        guard !selectedTerms.isEmpty else {
+            return nil
+        }
+
+        return "Preferred spellings: \(selectedTerms.joined(separator: ", "))"
+    }
+
+    private static func composeChunkPrompt(basePrompt: String?, rollingContext: String) -> String? {
+        let base = basePrompt?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         let context = rollingContext.trimmingCharacters(in: .whitespacesAndNewlines)
-        return context.isEmpty ? nil : "Recent transcript context:\n\(context)"
+
+        switch (base.isEmpty, context.isEmpty) {
+        case (true, true):
+            return nil
+        case (false, true):
+            return base
+        case (true, false):
+            return "Recent transcript context:\n\(context)"
+        case (false, false):
+            return "\(base)\n\nRecent transcript context:\n\(context)"
+        }
     }
 
     private static func updatedChunkContext(from chunkTexts: [String]) -> String {

@@ -40,7 +40,7 @@ struct SpeechActivityDiagnostics: Sendable {
     let selectedDuration: TimeInterval
 }
 
-enum PreparedTranscriptionAudio {
+enum PreparedTranscriptionAudio: Sendable {
     case noSpeech(SpeechActivityDiagnostics)
     case singlePass(samples: [Float], diagnostics: SpeechActivityDiagnostics)
     case chunked(chunks: [SpeechChunk], diagnostics: SpeechActivityDiagnostics)
@@ -73,17 +73,24 @@ extension PreparedTranscriptionAudio {
     }
 }
 
-/// Post-stop speech activity analysis.
+/// Post-stop speech detection and offline transcription-window preparation.
 ///
-/// Design goals:
-/// - VAD remains post-stop only; start/stop is still explicit.
-/// - Short clips stay simple: trim once, transcribe once.
-/// - Longer clips prioritize reliability over trimming: if VAD found credible speech
-///   anywhere in the recording, prefer a full-buffer Whisper pass so later/softer
-///   words are not lost at VAD boundaries.
-/// - Chunked transcription is an extreme long-form fallback only.
-/// - If VAD is unavailable, fall back to a single-pass whisper decode instead of blocking.
-final class SpeechActivityService {
+/// The product path uses VAD only as a post-stop speech gate and passes the original
+/// recording to the selected engine. The window-preparation methods remain for the
+/// offline Whisper comparison harness.
+actor SpeechActivityService {
+    private final class Context: @unchecked Sendable {
+        let pointer: OpaquePointer
+
+        init(pointer: OpaquePointer) {
+            self.pointer = pointer
+        }
+
+        deinit {
+            whisper_vad_free(pointer)
+        }
+    }
+
     private enum Tuning {
         static let minSpeechDurationMS = 90.0
         static let minSilenceDurationMS = 500.0
@@ -116,22 +123,67 @@ final class SpeechActivityService {
     }
 
     private let modelURL: URL?
-    private var vadContext: OpaquePointer?
+    private var vadContext: Context?
     private var hasAttemptedContextLoad = false
 
     init(modelURL: URL? = ModelLocator.bundledVADModelURL()) {
         self.modelURL = modelURL
     }
 
-    deinit {
-        if let vadContext {
-            whisper_vad_free(vadContext)
+    func prepare() -> Bool {
+        if vadContext == nil {
+            hasAttemptedContextLoad = false
         }
+        return loadContextIfPossible() != nil
     }
 
     func prepareTranscriptionAudio(from audioURL: URL) throws -> PreparedTranscriptionAudio {
         let samples = try AudioSampleDecoder.decodeWhisperSamples(from: audioURL)
         return prepareTranscriptionAudio(from: samples)
+    }
+
+    func analyzeSpeech(from audioURL: URL) throws -> SpeechActivityDiagnostics {
+        let samples = try AudioSampleDecoder.decodeWhisperSamples(from: audioURL)
+        return analyzeSpeech(in: samples)
+    }
+
+    private func analyzeSpeech(in samples: [Float]) -> SpeechActivityDiagnostics {
+        guard !samples.isEmpty else {
+            return diagnostics(
+                mode: .noSpeech,
+                originalSampleCount: 0,
+                regions: [],
+                selectedSampleCount: 0
+            )
+        }
+
+        guard let regions = detectedSpeechRegions(in: samples) else {
+            return diagnostics(
+                mode: .bypass,
+                originalSampleCount: samples.count,
+                regions: [],
+                selectedSampleCount: samples.count
+            )
+        }
+
+        guard !regions.isEmpty else {
+            let mode: SpeechActivityDiagnostics.Mode = shouldUseShortUtteranceFallback(for: samples.count)
+                ? .shortFallback
+                : .noSpeech
+            return diagnostics(
+                mode: mode,
+                originalSampleCount: samples.count,
+                regions: [],
+                selectedSampleCount: mode == .noSpeech ? 0 : samples.count
+            )
+        }
+
+        return diagnostics(
+            mode: .singlePass,
+            originalSampleCount: samples.count,
+            regions: regions,
+            selectedSampleCount: samples.count
+        )
     }
 
     func prepareTranscriptionAudio(from samples: [Float]) -> PreparedTranscriptionAudio {
@@ -144,57 +196,25 @@ final class SpeechActivityService {
             ))
         }
 
-        guard let vadContext = loadContextIfPossible() else {
+        let analysis = analyzeSpeech(in: samples)
+        guard analysis.mode != .bypass else {
             return .singlePass(
                 samples: samples,
-                diagnostics: diagnostics(
-                    mode: .bypass,
-                    originalSampleCount: samples.count,
-                    regions: [],
-                    selectedSampleCount: samples.count
-                )
+                diagnostics: analysis
             )
         }
 
-        let probabilities = detectSpeechProbabilities(context: vadContext, samples: samples)
-
-        guard let rawRegions = buildSpeechRegions(
-            context: vadContext,
-            samples: samples,
-            probabilities: probabilities
-        ) else {
-            return .singlePass(
-                samples: samples,
-                diagnostics: diagnostics(
-                    mode: .bypass,
-                    originalSampleCount: samples.count,
-                    regions: [],
-                    selectedSampleCount: samples.count
-                )
-            )
-        }
-
-        let mergedRegions = mergeAdjacentRegions(rawRegions)
+        let mergedRegions = analysis.speechRegions
 
         guard !mergedRegions.isEmpty else {
-            if shouldUseShortUtteranceFallback(for: samples.count) {
+            if analysis.mode == .shortFallback {
                 return .singlePass(
                     samples: samples,
-                    diagnostics: diagnostics(
-                        mode: .shortFallback,
-                        originalSampleCount: samples.count,
-                        regions: [],
-                        selectedSampleCount: samples.count
-                    )
+                    diagnostics: analysis
                 )
             }
 
-            return .noSpeech(diagnostics(
-                mode: .noSpeech,
-                originalSampleCount: samples.count,
-                regions: [],
-                selectedSampleCount: 0
-            ))
+            return .noSpeech(analysis)
         }
 
         if shouldUseTrimmedSinglePass(for: samples.count) {
@@ -254,6 +274,23 @@ final class SpeechActivityService {
         )
     }
 
+    private func detectedSpeechRegions(in samples: [Float]) -> [SpeechRegion]? {
+        guard let context = loadContextIfPossible() else {
+            return nil
+        }
+
+        let probabilities = detectSpeechProbabilities(context: context.pointer, samples: samples)
+        guard let rawRegions = buildSpeechRegions(
+            context: context.pointer,
+            samples: samples,
+            probabilities: probabilities
+        ) else {
+            return nil
+        }
+
+        return mergeAdjacentRegions(rawRegions)
+    }
+
     private func detectSpeechProbabilities(context: OpaquePointer, samples: [Float]) -> [Float]? {
         let status = samples.withUnsafeBufferPointer { buffer in
             whisper_vad_detect_speech(context, buffer.baseAddress, Int32(buffer.count))
@@ -279,6 +316,9 @@ final class SpeechActivityService {
         guard !samples.isEmpty else {
             return []
         }
+        guard let probabilities, !probabilities.isEmpty else {
+            return nil
+        }
 
         var params = whisper_vad_default_params()
         params.threshold = Tuning.segmentThreshold
@@ -288,9 +328,7 @@ final class SpeechActivityService {
         params.speech_pad_ms = Int32(Tuning.internalSpeechPadMS)
         params.samples_overlap = 0
 
-        guard let segments = samples.withUnsafeBufferPointer({ buffer in
-            whisper_vad_segments_from_samples(context, params, buffer.baseAddress, Int32(buffer.count))
-        }) else {
+        guard let segments = whisper_vad_segments_from_probs(context, params) else {
             return nil
         }
         defer {
@@ -302,12 +340,7 @@ final class SpeechActivityService {
             return []
         }
 
-        let samplesPerProbabilityFrame: Double? = {
-            guard let probabilities, !probabilities.isEmpty else {
-                return nil
-            }
-            return Double(samples.count) / Double(probabilities.count)
-        }()
+        let samplesPerProbabilityFrame = Double(samples.count) / Double(probabilities.count)
 
         var regions: [SpeechRegion] = []
         regions.reserveCapacity(Int(count))
@@ -322,11 +355,7 @@ final class SpeechActivityService {
             }
 
             let probabilityWindow: ArraySlice<Float> = {
-                guard
-                    let probabilities,
-                    let samplesPerProbabilityFrame,
-                    samplesPerProbabilityFrame > 0
-                else {
+                guard samplesPerProbabilityFrame > 0 else {
                     return []
                 }
 
@@ -528,7 +557,7 @@ final class SpeechActivityService {
         )
     }
 
-    private func loadContextIfPossible() -> OpaquePointer? {
+    private func loadContextIfPossible() -> Context? {
         if let vadContext {
             return vadContext
         }
@@ -548,7 +577,10 @@ final class SpeechActivityService {
         params.use_gpu = false
         params.gpu_device = 0
 
-        vadContext = whisper_vad_init_from_file_with_params(modelURL.path, params)
+        guard let pointer = whisper_vad_init_from_file_with_params(modelURL.path, params) else {
+            return nil
+        }
+        vadContext = Context(pointer: pointer)
         return vadContext
     }
 }
