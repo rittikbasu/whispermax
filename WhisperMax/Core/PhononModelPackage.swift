@@ -65,18 +65,21 @@ enum PhononModelPackage {
     ]
 
     static func isInstalled(at bundleURL: URL) -> Bool {
-        let markerURL = bundleURL.appendingPathComponent("whispermax-install.json")
-        guard
-            let data = try? Data(contentsOf: markerURL),
-            let installation = try? JSONDecoder().decode(Installation.self, from: data),
-            installation.revision == revision
-        else {
+        guard hasCurrentRevisionMarker(at: bundleURL) else {
             return false
         }
 
         return assets.allSatisfy { asset in
             fileSize(at: bundleURL.appendingPathComponent(asset.path)) == asset.byteCount
         }
+    }
+
+    static func isValidInstallation(at bundleURL: URL) -> Bool {
+        guard hasCurrentRevisionMarker(at: bundleURL) else {
+            return false
+        }
+
+        return assets.allSatisfy { isValid($0, in: bundleURL) }
     }
 
     static func isValid(_ asset: Asset, in directory: URL) -> Bool {
@@ -119,5 +122,17 @@ enum PhononModelPackage {
             return nil
         }
         return Int64(size)
+    }
+
+    private static func hasCurrentRevisionMarker(at bundleURL: URL) -> Bool {
+        let markerURL = bundleURL.appendingPathComponent("whispermax-install.json")
+        guard
+            let data = try? Data(contentsOf: markerURL),
+            let installation = try? JSONDecoder().decode(Installation.self, from: data)
+        else {
+            return false
+        }
+
+        return installation.revision == revision
     }
 }

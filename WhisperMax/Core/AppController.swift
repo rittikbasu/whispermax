@@ -150,6 +150,7 @@ final class AppController {
 
     private var transcriptionEngine: (any SpeechTranscriptionEngine)?
     private var modelPreparationTask: Task<Void, Never>?
+    private var requiresModelDownloadRepair = false
     private var transcriptionTask: Task<Void, Never>?
     private var transcriptionShutdown: (id: UUID, task: Task<Void, Never>)?
     private var preRecordingSystemDefaultInputDeviceID: AudioObjectID?
@@ -240,19 +241,22 @@ final class AppController {
         phase == .ready && transcriptionEngine != nil
     }
 
-    func startModelSetup() {
+    func startModelSetup(forceDownload: Bool = false) {
         if case .downloading = modelSetupState {
             return
         }
 
-        if case .ready = modelSetupState, hasUsableModelAvailable {
-            startModelPreparation()
-            return
-        }
+        let shouldForceDownload = forceDownload || requiresModelDownloadRepair
+        if !shouldForceDownload {
+            if case .ready = modelSetupState, hasUsableModelAvailable {
+                startModelPreparation()
+                return
+            }
 
-        if ModelLocator.hasInstalledPhononModel {
-            markModelSetupReady()
-            return
+            if ModelLocator.hasInstalledPhononModel {
+                markModelSetupReady()
+                return
+            }
         }
 
         beginModelDownload()
@@ -278,7 +282,7 @@ final class AppController {
     func retryDownload() {
         modelDownloader = nil
         modelSetupState = .idle
-        startModelSetup()
+        startModelSetup(forceDownload: requiresModelDownloadRepair)
     }
 
     func pauseModelDownload() {
@@ -366,7 +370,7 @@ final class AppController {
     var inputDevices: [AudioInputDevice] = []
     var statusText: String = "Loading local model..."
     var modelPreparationError: String?
-    var modelDisplayName: String = "Phonon-2 Core ML"
+    var modelDisplayName: String = "Phonon-2"
     var modelPath: String = ""
     var historyRetentionLimit: HistoryRetentionLimit = .defaultLimit
     var hotkeyDisplay: String = "⌥ Space"
@@ -1128,7 +1132,7 @@ final class AppController {
         }
 
         modelPath = ModelLocator.phononModelURL.path
-        modelDisplayName = "Phonon-2 Core ML"
+        modelDisplayName = "Phonon-2"
         let engine = PhononCoreMLEngine(configuration: PhononCoreMLConfiguration(
             modelURL: ModelLocator.phononModelURL
         ))
@@ -1160,8 +1164,26 @@ final class AppController {
         guard modelPreparationError != nil, modelPreparationTask == nil else { return }
         modelPreparationError = nil
         phase = .loadingModel
-        statusText = "Loading local model…"
-        startModelPreparation()
+        statusText = "Checking local model…"
+        let modelURL = ModelLocator.phononModelURL
+        modelPreparationTask = Task { @MainActor [weak self] in
+            guard let self else { return }
+            defer { self.modelPreparationTask = nil }
+
+            let isValid = await Task.detached(priority: .userInitiated) {
+                PhononModelPackage.isValidInstallation(at: modelURL)
+            }.value
+            guard !Task.isCancelled else { return }
+
+            guard isValid else {
+                requiresModelDownloadRepair = true
+                enterModelRepairMode()
+                startModelSetup(forceDownload: true)
+                return
+            }
+
+            await preloadModel()
+        }
     }
 
     private func showModelPreparationError(_ message: String) {
@@ -1518,6 +1540,7 @@ final class AppController {
 
     private func markModelSetupReady() {
         modelDownloader = nil
+        requiresModelDownloadRepair = false
         try? FileManager.default.removeItem(at: ModelLocator.phononDownloadResumeDataURL)
         try? FileManager.default.removeItem(at: ModelLocator.phononDownloadResumeAssetURL)
         modelSetupState = .ready
@@ -1529,6 +1552,7 @@ final class AppController {
         onboardingMode = .modelRepair
         onboardingStep = .download
         modelSetupState = .idle
+        modelPreparationError = nil
         shutdownTranscriptionEngine()
         modelPath = ""
         phase = .loadingModel
