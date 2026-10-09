@@ -118,7 +118,7 @@ The model is stored locally in Application Support. First launch may take a litt
 
 ## how it works
 
-- Phonon-2 Core ML performs local speech recognition using the Neural Engine
+- Phonon-2 performs local speech recognition on the Neural Engine through Core ML
 - Silero VAD rejects recordings without speech before recognition
 - the audio and transcript stay on your Mac
 - insertion tries the most reliable path for the current app surface
