@@ -55,22 +55,6 @@ extension PreparedTranscriptionAudio {
             return diagnostics
         }
     }
-
-    var debugChunkPlans: [DebugRecordingChunkPlan] {
-        switch self {
-        case .chunked(let chunks, _):
-            return chunks.map {
-                DebugRecordingChunkPlan(
-                    startSample: $0.startSample,
-                    endSample: $0.endSample,
-                    overlapLeadSamples: $0.overlapLeadSamples,
-                    overlapTrailSamples: $0.overlapTrailSamples
-                )
-            }
-        case .noSpeech, .singlePass:
-            return []
-        }
-    }
 }
 
 /// Post-stop speech detection and offline transcription-window preparation.
@@ -135,11 +119,6 @@ actor SpeechActivityService {
             hasAttemptedContextLoad = false
         }
         return loadContextIfPossible() != nil
-    }
-
-    func prepareTranscriptionAudio(from audioURL: URL) throws -> PreparedTranscriptionAudio {
-        let samples = try AudioSampleDecoder.decodeWhisperSamples(from: audioURL)
-        return prepareTranscriptionAudio(from: samples)
     }
 
     func analyzeSpeech(from audioURL: URL) throws -> SpeechActivityDiagnostics {

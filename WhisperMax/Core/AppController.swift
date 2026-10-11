@@ -40,57 +40,41 @@ enum RecorderIssue: Equatable {
     case speechDetectionUnavailable
     case generic(String)
 
-    var statusMessage: String {
+    private var presentation: (statusMessage: String, title: String, subtitle: String?, autoDismissDelay: TimeInterval) {
         switch self {
         case .microphonePermissionRequired:
-            return "Microphone access is required for local dictation."
+            return (
+                "Microphone access is required for local dictation.",
+                "Microphone access needed",
+                nil,
+                4.2
+            )
         case .noSpeechDetected:
-            return "No speech detected."
+            return (
+                "No speech detected.",
+                "No speech detected",
+                "Try speaking a little louder or closer to the mic",
+                2.2
+            )
         case .speechDetectionUnavailable:
-            return "Speech detection is unavailable. Restart WhisperMax and try again."
+            return (
+                "Speech detection is unavailable. Restart WhisperMax and try again.",
+                "Couldn’t analyze speech",
+                "Restart WhisperMax and try again",
+                3.5
+            )
         case .generic(let message):
-            return message
+            return (message, "Try again", "Recorder reset", 1.8)
         }
     }
 
-    var title: String {
-        switch self {
-        case .microphonePermissionRequired:
-            return "Microphone access needed"
-        case .noSpeechDetected:
-            return "No speech detected"
-        case .speechDetectionUnavailable:
-            return "Couldn’t analyze speech"
-        case .generic:
-            return "Try again"
-        }
-    }
+    var statusMessage: String { presentation.statusMessage }
 
-    var subtitle: String? {
-        switch self {
-        case .microphonePermissionRequired:
-            return nil
-        case .noSpeechDetected:
-            return "Try speaking a little louder or closer to the mic"
-        case .speechDetectionUnavailable:
-            return "Restart WhisperMax and try again"
-        case .generic:
-            return "Recorder reset"
-        }
-    }
+    var title: String { presentation.title }
 
-    var autoDismissDelay: TimeInterval {
-        switch self {
-        case .microphonePermissionRequired:
-            return 4.2
-        case .noSpeechDetected:
-            return 2.2
-        case .speechDetectionUnavailable:
-            return 3.5
-        case .generic:
-            return 1.8
-        }
-    }
+    var subtitle: String? { presentation.subtitle }
+
+    var autoDismissDelay: TimeInterval { presentation.autoDismissDelay }
 }
 
 enum OnboardingStep: Int, CaseIterable {

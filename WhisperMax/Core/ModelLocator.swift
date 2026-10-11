@@ -16,7 +16,6 @@ enum ModelLocator {
     static let audioInputPreferenceFileURL = appSupportDirectory.appendingPathComponent("audio-input-preference.json")
     static let insertionPolicyFileURL = appSupportDirectory.appendingPathComponent("insertion-policy.json")
     static let onboardingCompleteFileURL = appSupportDirectory.appendingPathComponent("onboarding-complete")
-    static let downloadResumeDataURL = appSupportDirectory.appendingPathComponent("model-download.resumedata")
     static let debugRecordingsDirectory = appSupportDirectory.appendingPathComponent("DebugRecordings", isDirectory: true)
     static let modelsDirectory = appSupportDirectory.appendingPathComponent("Models", isDirectory: true)
     static let legacyTemporaryRecordingsDirectory = appSupportDirectory.appendingPathComponent("Recordings", isDirectory: true)
@@ -26,17 +25,6 @@ enum ModelLocator {
     static let phononStagingModelURL = modelsDirectory.appendingPathComponent(".Phonon-2-CoreML.partial", isDirectory: true)
     static let phononDownloadResumeDataURL = appSupportDirectory.appendingPathComponent("phonon-model-download.resumedata")
     static let phononDownloadResumeAssetURL = appSupportDirectory.appendingPathComponent("phonon-model-download.asset")
-
-    // Retained for the private Whisper comparison harness; the app no longer loads this recognizer.
-    static let appLocalModelURL = modelsDirectory.appendingPathComponent("ggml-large-v3-turbo.bin")
-
-    static let superwhisperModelURL: URL = {
-        FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent("Library", isDirectory: true)
-            .appendingPathComponent("Application Support", isDirectory: true)
-            .appendingPathComponent("superwhisper", isDirectory: true)
-            .appendingPathComponent("ggml-large-v3-turbo.bin")
-    }()
 
     static func prepareDirectories() throws {
         try FileManager.default.createDirectory(at: appSupportDirectory, withIntermediateDirectories: true)
@@ -76,18 +64,6 @@ enum ModelLocator {
         ), legacyFiles.isEmpty {
             try? fileManager.removeItem(at: legacyTemporaryRecordingsDirectory)
         }
-    }
-
-    static func preferredModelURL() -> URL? {
-        if FileManager.default.fileExists(atPath: appLocalModelURL.path) {
-            return appLocalModelURL
-        }
-
-        if FileManager.default.fileExists(atPath: superwhisperModelURL.path) {
-            return superwhisperModelURL
-        }
-
-        return nil
     }
 
     static var hasInstalledPhononModel: Bool {
