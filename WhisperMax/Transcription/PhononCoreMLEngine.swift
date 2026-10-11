@@ -2,30 +2,23 @@ import Foundation
 import CoreML
 import PhononCoreML
 
-struct PhononCoreMLConfiguration: Sendable {
-    let modelURL: URL
-}
-
-actor PhononCoreMLEngine: SpeechTranscriptionEngine {
+actor PhononCoreMLEngine {
     private enum EngineError: LocalizedError {
         case notPrepared
-        case originalAudioRequired
 
         var errorDescription: String? {
             switch self {
             case .notPrepared:
                 return "Phonon is not ready to transcribe."
-            case .originalAudioRequired:
-                return "Phonon requires the original audio recording."
             }
         }
     }
 
-    private let configuration: PhononCoreMLConfiguration
+    private let modelURL: URL
     private var transcriber: Transcriber?
 
-    init(configuration: PhononCoreMLConfiguration) {
-        self.configuration = configuration
+    init(modelURL: URL) {
+        self.modelURL = modelURL
     }
 
     func prepare() async throws {
@@ -40,7 +33,7 @@ actor PhononCoreMLEngine: SpeechTranscriptionEngine {
         options.singleShotMaxSeconds = 9.98
         options.windowSeconds = 10
 
-        let candidate = try Transcriber(bundle: configuration.modelURL, options: options)
+        let candidate = try Transcriber(bundle: modelURL, options: options)
         try Task.checkCancellation()
         _ = try candidate.transcribe(Self.warmUpSamples)
         try Task.checkCancellation()
@@ -59,17 +52,16 @@ actor PhononCoreMLEngine: SpeechTranscriptionEngine {
         }
     }()
 
-    func transcribe(input: SpeechTranscriptionInput, prompt _: String?) async throws -> SpeechTranscriptionOutput {
+    func transcribe(url: URL) async throws -> (text: String, inferenceDuration: TimeInterval) {
         try Task.checkCancellation()
         guard let transcriber else { throw EngineError.notPrepared }
-        guard case .originalAudio(let url) = input else { throw EngineError.originalAudioRequired }
 
         let startedAt = DispatchTime.now().uptimeNanoseconds
         let result = try transcriber.transcribe(url: url)
         try Task.checkCancellation()
         let elapsed = Double(DispatchTime.now().uptimeNanoseconds - startedAt) / 1_000_000_000
 
-        return SpeechTranscriptionOutput(
+        return (
             text: result.text,
             inferenceDuration: elapsed
         )

@@ -44,12 +44,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
         hotkeyMonitor?.stop()
-        controller.pauseModelDownload()
         controller.cancelRecording()
 
         guard terminationTask == nil else { return .terminateLater }
         let controller = controller
         terminationTask = Task { @MainActor [weak self] in
+            await controller.pauseModelDownload()
             await controller.shutdownTranscriptionEngineAndWait()
             self?.terminationTask = nil
             NSApp.reply(toApplicationShouldTerminate: true)

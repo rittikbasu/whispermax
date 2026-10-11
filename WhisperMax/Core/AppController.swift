@@ -148,7 +148,7 @@ final class AppController {
     private let speechActivityService = SpeechActivityService()
     private let debugRecordingStore = DebugRecordingStore()
 
-    private var transcriptionEngine: (any SpeechTranscriptionEngine)?
+    private var transcriptionEngine: PhononCoreMLEngine?
     private var modelPreparationTask: Task<Void, Never>?
     private var requiresModelDownloadRepair = false
     private var transcriptionTask: Task<Void, Never>?
@@ -285,8 +285,8 @@ final class AppController {
         startModelSetup(forceDownload: requiresModelDownloadRepair)
     }
 
-    func pauseModelDownload() {
-        modelDownloader?.pause()
+    func pauseModelDownload() async {
+        await modelDownloader?.pause()
     }
 
     func advanceOnboarding() {
@@ -1133,9 +1133,7 @@ final class AppController {
 
         modelPath = ModelLocator.phononModelURL.path
         modelDisplayName = "Phonon-2"
-        let engine = PhononCoreMLEngine(configuration: PhononCoreMLConfiguration(
-            modelURL: ModelLocator.phononModelURL
-        ))
+        let engine = PhononCoreMLEngine(modelURL: ModelLocator.phononModelURL)
         transcriptionEngine = engine
 
         do {
@@ -1326,13 +1324,8 @@ final class AppController {
                 return
             }
 
-            let output = try await transcriptionEngine.transcribe(
-                input: .originalAudio(url),
-                prompt: nil
-            )
-            if let inferenceDuration = output.inferenceDuration {
-                NSLog("WhisperMax ASR warm inference: %@ %.0f ms", modelDisplayName, inferenceDuration * 1_000)
-            }
+            let output = try await transcriptionEngine.transcribe(url: url)
+            NSLog("WhisperMax ASR warm inference: %@ %.0f ms", modelDisplayName, output.inferenceDuration * 1_000)
 
             let cleanedTranscript = TranscriptFormatter.normalize(
                 output.text,

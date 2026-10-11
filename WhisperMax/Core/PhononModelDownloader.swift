@@ -10,7 +10,6 @@ final class PhononModelDownloader: NSObject, @unchecked Sendable {
     private let resumeDataURL: URL
     private let resumeAssetURL: URL
     private let fileManager = FileManager.default
-    private let stateLock = NSLock()
     private let delegateQueue: OperationQueue = {
         let queue = OperationQueue()
         queue.name = "com.whispermax.phonon-model-downloader"
@@ -23,6 +22,7 @@ final class PhononModelDownloader: NSObject, @unchecked Sendable {
     private var retryTask: DispatchWorkItem?
     private var currentAsset: PhononModelPackage.Asset?
     private var completedByteCount: Int64 = 0
+    private var verifiedAssetPaths = Set<String>()
     private var retryCount = 0
     private var isPausing = false
     private let maximumRetryCount = 3
@@ -35,11 +35,22 @@ final class PhononModelDownloader: NSObject, @unchecked Sendable {
     }
 
     func start() {
+        delegateQueue.addOperation { [weak self] in
+            self?.startOnDelegateQueue()
+        }
+    }
+
+    private func startOnDelegateQueue() {
         do {
             try fileManager.createDirectory(at: stagingURL, withIntermediateDirectories: true)
         } catch {
             reportError("Could not prepare the Phonon model folder: \(error.localizedDescription)")
             return
+        }
+
+        for asset in PhononModelPackage.assets where PhononModelPackage.isValid(asset, in: stagingURL) {
+            verifiedAssetPaths.insert(asset.path)
+            completedByteCount += asset.byteCount
         }
 
         let configuration = URLSessionConfiguration.default
@@ -49,48 +60,60 @@ final class PhononModelDownloader: NSObject, @unchecked Sendable {
         configuration.allowsExpensiveNetworkAccess = true
         configuration.allowsConstrainedNetworkAccess = true
         session = URLSession(configuration: configuration, delegate: self, delegateQueue: delegateQueue)
-        delegateQueue.addOperation { [weak self] in
-            self?.startNextAsset()
+        startNextAsset()
+    }
+
+    func pause() async {
+        await withCheckedContinuation { continuation in
+            delegateQueue.addOperation { [weak self] in
+                guard let self else {
+                    continuation.resume()
+                    return
+                }
+
+                self.pauseOnDelegateQueue {
+                    continuation.resume()
+                }
+            }
         }
     }
 
-    func pause() {
+    private func pauseOnDelegateQueue(completion: @escaping @Sendable () -> Void) {
+        isPausing = true
         retryTask?.cancel()
         retryTask = nil
 
-        stateLock.lock()
-        isPausing = true
-        let task = downloadTask
-        let asset = currentAsset
-        downloadTask = nil
-        stateLock.unlock()
+        guard let task = downloadTask, let asset = currentAsset else {
+            session?.invalidateAndCancel()
+            session = nil
+            completion()
+            return
+        }
 
-        guard let task, let asset else { return }
-        let semaphore = DispatchSemaphore(value: 0)
-        task.cancel(byProducingResumeData: { [resumeDataURL, resumeAssetURL] data in
-            if let data {
-                try? data.write(to: resumeDataURL, options: .atomic)
-                try? asset.path.write(to: resumeAssetURL, atomically: true, encoding: .utf8)
+        downloadTask = nil
+        task.cancel(byProducingResumeData: { [weak self] data in
+            guard let self else {
+                completion()
+                return
             }
-            semaphore.signal()
+
+            self.delegateQueue.addOperation {
+                if self.verifiedAssetPaths.contains(asset.path) {
+                    self.clearResumeData()
+                } else {
+                    self.persistResumeData(data, for: asset)
+                }
+                self.session?.invalidateAndCancel()
+                self.session = nil
+                completion()
+            }
         })
-        _ = semaphore.wait(timeout: .now() + 2)
-        session?.invalidateAndCancel()
-        session = nil
     }
 
     private func startNextAsset() {
-        completedByteCount = 0
-        var pendingAsset: PhononModelPackage.Asset?
-        for asset in PhononModelPackage.assets {
-            guard PhononModelPackage.isValid(asset, in: stagingURL) else {
-                pendingAsset = asset
-                break
-            }
-            completedByteCount += asset.byteCount
-        }
+        guard !isPausing else { return }
 
-        guard let asset = pendingAsset else {
+        guard let asset = PhononModelPackage.assets.first(where: { !verifiedAssetPaths.contains($0.path) }) else {
             do {
                 try installStagedModel()
                 clearResumeData()
@@ -103,16 +126,13 @@ final class PhononModelDownloader: NSObject, @unchecked Sendable {
             return
         }
 
-        stateLock.lock()
         currentAsset = asset
-        isPausing = false
-        stateLock.unlock()
         retryCount = 0
         startCurrentAsset()
     }
 
     private func startCurrentAsset() {
-        guard let asset = currentAsset, let session else { return }
+        guard !isPausing, let asset = currentAsset, let session else { return }
 
         let resumeData: Data?
         if (try? String(contentsOf: resumeAssetURL, encoding: .utf8)) == asset.path {
@@ -131,14 +151,16 @@ final class PhononModelDownloader: NSObject, @unchecked Sendable {
             task = session.downloadTask(with: request)
         }
 
-        stateLock.lock()
         downloadTask = task
-        stateLock.unlock()
         task.resume()
     }
 
-    private func install(_ asset: PhononModelPackage.Asset, from location: URL) throws {
-        guard let response = downloadTask?.response as? HTTPURLResponse,
+    private func install(
+        _ asset: PhononModelPackage.Asset,
+        from location: URL,
+        response: URLResponse?
+    ) throws {
+        guard let response = response as? HTTPURLResponse,
               (200..<300).contains(response.statusCode)
         else {
             throw DownloadError.invalidResponse
@@ -162,6 +184,7 @@ final class PhononModelDownloader: NSObject, @unchecked Sendable {
         }
         try fileManager.moveItem(at: location, to: targetURL)
         clearResumeData()
+        verifiedAssetPaths.insert(asset.path)
         completedByteCount += asset.byteCount
     }
 
@@ -220,7 +243,8 @@ final class PhononModelDownloader: NSObject, @unchecked Sendable {
         let task = DispatchWorkItem { [weak self] in
             guard let self else { return }
             self.delegateQueue.addOperation {
-                guard self.currentAsset?.path == asset.path else { return }
+                guard !self.isPausing, self.currentAsset?.path == asset.path else { return }
+                self.retryTask = nil
                 self.startCurrentAsset()
             }
         }
@@ -231,9 +255,7 @@ final class PhononModelDownloader: NSObject, @unchecked Sendable {
     private func fail(_ message: String) {
         session?.finishTasksAndInvalidate()
         session = nil
-        stateLock.lock()
         downloadTask = nil
-        stateLock.unlock()
         reportError(message)
     }
 
@@ -278,7 +300,9 @@ extension PhononModelDownloader: URLSessionDownloadDelegate {
         totalBytesWritten: Int64,
         totalBytesExpectedToWrite: Int64
     ) {
-        guard let asset = currentAsset else { return }
+        guard !isPausing,
+              self.downloadTask === downloadTask,
+              let asset = currentAsset else { return }
         let assetProgress = min(1, Double(totalBytesWritten) / Double(asset.byteCount))
         let overall = Double(completedByteCount) / Double(PhononModelPackage.totalByteCount)
             + assetProgress * Double(asset.byteCount) / Double(PhononModelPackage.totalByteCount)
@@ -290,13 +314,13 @@ extension PhononModelDownloader: URLSessionDownloadDelegate {
         downloadTask: URLSessionDownloadTask,
         didFinishDownloadingTo location: URL
     ) {
-        guard let asset = currentAsset else { return }
+        guard !isPausing,
+              self.downloadTask === downloadTask,
+              let asset = currentAsset else { return }
         do {
-            try install(asset, from: location)
+            try install(asset, from: location, response: downloadTask.response)
             retryCount = 0
-            stateLock.lock()
             self.downloadTask = nil
-            stateLock.unlock()
             delegateQueue.addOperation { [weak self] in
                 self?.startNextAsset()
             }
@@ -314,17 +338,13 @@ extension PhononModelDownloader: URLSessionDownloadDelegate {
     ) {
         guard let error else { return }
         let nsError = error as NSError
-        stateLock.lock()
-        let shouldIgnoreCancellation = isPausing && nsError.code == NSURLErrorCancelled
-        let asset = currentAsset
-        stateLock.unlock()
-        guard !shouldIgnoreCancellation, let asset else { return }
+        guard !isPausing,
+              self.downloadTask === task,
+              let asset = currentAsset else { return }
 
         let resumeData = nsError.userInfo[NSURLSessionDownloadTaskResumeData] as? Data
         persistResumeData(resumeData, for: asset)
-        stateLock.lock()
         downloadTask = nil
-        stateLock.unlock()
         retryAfterTransientFailure(error, for: asset)
     }
 }

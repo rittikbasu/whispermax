@@ -35,7 +35,7 @@ private final class WhisperContext {
     }
 }
 
-actor WhisperEngine: SpeechTranscriptionEngine {
+actor WhisperEngine {
     enum EngineError: LocalizedError {
         case initializationFailed
         case transcriptionFailed
@@ -218,32 +218,5 @@ actor WhisperEngine: SpeechTranscriptionEngine {
             segmentCount: segmentCount,
             segmentDiagnostics: includeTokenDiagnostics ? segmentDiagnostics : nil
         )
-    }
-
-    func transcribe(
-        input: SpeechTranscriptionInput,
-        prompt: String?
-    ) async throws -> SpeechTranscriptionOutput {
-        let samples: [Float]
-        switch input {
-        case .preparedSamples(let preparedSamples):
-            samples = preparedSamples
-        case .originalAudio(let url):
-            samples = try AudioSampleDecoder.decodeWhisperSamples(from: url)
-        }
-
-        let result = try await transcribe(
-            samples: samples,
-            prompt: prompt,
-            includeTokenDiagnostics: false
-        )
-        return SpeechTranscriptionOutput(
-            text: result.text,
-            inferenceDuration: nil
-        )
-    }
-
-    func shutdown() async {
-        context = nil
     }
 }
