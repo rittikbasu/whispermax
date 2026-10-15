@@ -141,6 +141,7 @@ final class GlobalHotkeyMonitor {
 
     private func matchesCancel(_ event: NSEvent) -> Bool {
         guard let controller else { return false }
-        return event.keyCode == 53 && controller.phase == .recording
+        return event.keyCode == 53
+            && (controller.phase == .recording || controller.phase == .transcribing)
     }
 }

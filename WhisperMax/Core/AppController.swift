@@ -37,51 +37,52 @@ enum RecordingPhase: Equatable {
 enum RecorderIssue: Equatable {
     case microphonePermissionRequired
     case noSpeechDetected
+    case speechDetectionUnavailable
+    case recordingStartFailed(String)
     case generic(String)
 
-    var statusMessage: String {
+    private var presentation: (statusMessage: String, title: String, subtitle: String?, autoDismissDelay: TimeInterval) {
         switch self {
         case .microphonePermissionRequired:
-            return "Microphone access is required for local dictation."
+            return (
+                "Microphone access is required for local dictation.",
+                "Microphone access needed",
+                nil,
+                4.2
+            )
         case .noSpeechDetected:
-            return "No speech detected."
+            return (
+                "No speech detected.",
+                "No speech detected",
+                "Try speaking a little louder or closer to the mic",
+                2.2
+            )
+        case .speechDetectionUnavailable:
+            return (
+                "Speech detection is unavailable. Restart WhisperMax and try again.",
+                "Couldn’t analyze speech",
+                "Restart WhisperMax and try again",
+                3.5
+            )
+        case .recordingStartFailed(let message):
+            return (
+                message,
+                "Couldn’t start recording",
+                "Check your microphone and try again",
+                2.4
+            )
         case .generic(let message):
-            return message
+            return (message, "Try again", "Recorder reset", 1.8)
         }
     }
 
-    var title: String {
-        switch self {
-        case .microphonePermissionRequired:
-            return "Microphone access needed"
-        case .noSpeechDetected:
-            return "No speech detected"
-        case .generic:
-            return "Try again"
-        }
-    }
+    var statusMessage: String { presentation.statusMessage }
 
-    var subtitle: String? {
-        switch self {
-        case .microphonePermissionRequired:
-            return nil
-        case .noSpeechDetected:
-            return "Try speaking a little louder or closer to the mic"
-        case .generic:
-            return "Recorder reset"
-        }
-    }
+    var title: String { presentation.title }
 
-    var autoDismissDelay: TimeInterval {
-        switch self {
-        case .microphonePermissionRequired:
-            return 4.2
-        case .noSpeechDetected:
-            return 2.2
-        case .generic:
-            return 1.8
-        }
-    }
+    var subtitle: String? { presentation.subtitle }
+
+    var autoDismissDelay: TimeInterval { presentation.autoDismissDelay }
 }
 
 enum OnboardingStep: Int, CaseIterable {
@@ -139,7 +140,12 @@ final class AppController {
     private let speechActivityService = SpeechActivityService()
     private let debugRecordingStore = DebugRecordingStore()
 
-    private var whisperEngine: WhisperEngine?
+    private var transcriptionEngine: PhononCoreMLEngine?
+    private var modelPreparationTask: Task<Void, Never>?
+    private var requiresModelDownloadRepair = false
+    private var transcriptionTask: Task<Void, Never>?
+    private var transcriptionShutdown: (id: UUID, task: Task<Void, Never>)?
+    private var isStartingRecording = false
     private var preRecordingSystemDefaultInputDeviceID: AudioObjectID?
     private var recordingPinnedDeviceID: AudioObjectID?
     private var permissionMonitorTask: Task<Void, Never>?
@@ -148,8 +154,17 @@ final class AppController {
     private var menuFeedbackResetTask: Task<Void, Never>?
     private var pendingDeleteResetTask: Task<Void, Never>?
     private var pendingInsertionTarget: InsertionTargetContext?
-    private var invalidModelPathsForSession: Set<String> = []
     private(set) var transcribingAnimationStartTime: TimeInterval?
+
+#if DEBUG
+    var appleVoiceProcessingDiagnosticEnabled = false
+    var speechGateBypassDiagnosticEnabled = false
+    var appleVoiceProcessingDiagnosticStatus = "No voice-processing attempt yet." {
+        didSet {
+            UserDefaults.standard.set(appleVoiceProcessingDiagnosticStatus, forKey: "AppleVoiceProcessingDiagnosticStatus")
+        }
+    }
+#endif
 
     var phase: RecordingPhase = .loadingModel {
         didSet {
@@ -167,17 +182,15 @@ final class AppController {
 
     // MARK: - Onboarding
 
-    enum ModelSource {
-        case ownPath        // already at WhisperMax's canonical path
-        case superwhisper   // found in SuperWhisper, hardlinked across
-        case downloaded     // freshly downloaded from HuggingFace
-    }
-
     private enum ModelSetupState: Equatable {
         case idle
         case downloading(Double)
-        case ready(ModelSource)
+        case ready
         case failed(String)
+    }
+
+    private enum SpeechGate {
+        static let minimumPeakProbability: Float = 0.5
     }
 
     var hasCompletedOnboarding: Bool = false
@@ -185,10 +198,14 @@ final class AppController {
     var onboardingStep: OnboardingStep = .download
     private var modelSetupState: ModelSetupState = .idle
 
-    private var modelDownloader: ModelDownloader?
+    private var modelDownloader: PhononModelDownloader?
 
     var onboardingSteps: [OnboardingStep] {
-        onboardingMode == .modelRepair ? [.download] : OnboardingStep.allCases
+        guard onboardingMode == .modelRepair, !shouldResumePermissionsStep else {
+            return OnboardingStep.allCases
+        }
+
+        return [.download, .ready]
     }
 
     var downloadProgress: Double {
@@ -216,13 +233,6 @@ final class AppController {
         return nil
     }
 
-    var modelSource: ModelSource? {
-        if case .ready(let source) = modelSetupState {
-            return source
-        }
-        return nil
-    }
-
     var isDownloadComplete: Bool {
         if case .ready = modelSetupState {
             return true
@@ -230,42 +240,31 @@ final class AppController {
         return false
     }
 
-    func startModelSetup() {
+    var isModelPrepared: Bool {
+        phase == .ready && transcriptionEngine != nil
+    }
+
+    func startModelSetup(forceDownload: Bool = false) {
         if case .downloading = modelSetupState {
             return
         }
 
-        if case .ready = modelSetupState, hasUsableModelAvailable {
-            return
-        }
-
-        // Already at our own path
-        if canUseModel(at: ModelLocator.appLocalModelURL) {
-            markModelSetupReady(.ownPath)
-            return
-        }
-
-        // Found in SuperWhisper — hardlink to our path (instant, zero extra disk space)
-        if canUseModel(at: ModelLocator.superwhisperModelURL) {
-            do {
-                try FileManager.default.createDirectory(
-                    at: ModelLocator.modelsDirectory, withIntermediateDirectories: true)
-                if FileManager.default.fileExists(atPath: ModelLocator.appLocalModelURL.path) {
-                    try FileManager.default.removeItem(at: ModelLocator.appLocalModelURL)
-                }
-                try FileManager.default.linkItem(
-                    at: ModelLocator.superwhisperModelURL, to: ModelLocator.appLocalModelURL)
-                markModelSetupReady(.superwhisper)
-            } catch {
-                // Different volume — hardlink not possible, fall through to download
+        let shouldForceDownload = forceDownload || requiresModelDownloadRepair
+        if !shouldForceDownload {
+            if case .ready = modelSetupState, hasUsableModelAvailable {
+                startModelPreparation()
+                return
             }
-            if isDownloadComplete { return }
+
+            if ModelLocator.hasInstalledPhononModel {
+                markModelSetupReady()
+                return
+            }
         }
 
-        // No model found anywhere — download from HuggingFace
         beginModelDownload()
 
-        let downloader = ModelDownloader()
+        let downloader = PhononModelDownloader()
         modelDownloader = downloader
 
         downloader.onProgress = { [weak self] progress in
@@ -273,7 +272,7 @@ final class AppController {
         }
         downloader.onComplete = { [weak self] in
             self?.modelDownloader = nil
-            self?.markModelSetupReady(.downloaded)
+            self?.markModelSetupReady()
         }
         downloader.onError = { [weak self] message in
             self?.modelDownloader = nil
@@ -284,19 +283,18 @@ final class AppController {
     }
 
     func retryDownload() {
-        modelDownloader?.cancel()
         modelDownloader = nil
         modelSetupState = .idle
-        startModelSetup()
+        startModelSetup(forceDownload: requiresModelDownloadRepair)
     }
 
-    func pauseModelDownload() {
-        modelDownloader?.pause()
+    func pauseModelDownload() async {
+        await modelDownloader?.pause()
     }
 
     func advanceOnboarding() {
         if onboardingMode == .modelRepair, onboardingStep == .download, isDownloadComplete {
-            completeOnboarding()
+            onboardingStep = shouldResumePermissionsStep ? .permissions : .ready
             return
         }
 
@@ -314,6 +312,11 @@ final class AppController {
             return
         }
 
+        guard isModelPrepared else {
+            startModelPreparation()
+            return
+        }
+
         hasCompletedOnboarding = true
         onboardingMode = .full
         FileManager.default.createFile(
@@ -323,20 +326,17 @@ final class AppController {
 
         onOnboardingComplete?()
 
-        Task {
-            await preloadModel()
-        }
+        startModelPreparation()
     }
 
     func loadOnboardingState() {
         let hasSentinel = FileManager.default.fileExists(
             atPath: ModelLocator.onboardingCompleteFileURL.path
         )
-        let modelSource = availableModelSource
+        let hasModel = ModelLocator.hasInstalledPhononModel
+        hasCompletedOnboarding = hasSentinel && hasModel
 
-        hasCompletedOnboarding = hasSentinel && modelSource != nil
-
-        if hasSentinel && modelSource == nil {
+        if hasSentinel && !hasModel {
             onboardingMode = .modelRepair
             onboardingStep = .download
             modelSetupState = .idle
@@ -345,8 +345,8 @@ final class AppController {
 
         onboardingMode = .full
 
-        if let modelSource {
-            modelSetupState = .ready(modelSource)
+        if hasModel {
+            modelSetupState = .ready
             onboardingStep = shouldResumePermissionsStep ? .permissions : .ready
         } else {
             modelSetupState = .idle
@@ -372,7 +372,8 @@ final class AppController {
     var wordDictionary: [WordDictionaryEntry] = []
     var inputDevices: [AudioInputDevice] = []
     var statusText: String = "Loading local model..."
-    var modelDisplayName: String = "Whisper Large V3 Turbo"
+    var modelPreparationError: String?
+    var modelDisplayName: String = "Phonon-2"
     var modelPath: String = ""
     var historyRetentionLimit: HistoryRetentionLimit = .defaultLimit
     var hotkeyDisplay: String = "⌥ Space"
@@ -551,6 +552,10 @@ final class AppController {
             return "Grant microphone access to start dictation"
         }
 
+        if let modelPreparationError {
+            return modelPreparationError
+        }
+
         switch phase {
         case .loadingModel:
             return "Loading local model…"
@@ -593,10 +598,8 @@ final class AppController {
 
         guard hasCompletedOnboarding else { return }
 
-        Task {
-            await requestInitialPermissionsIfNeeded()
-            await preloadModel()
-        }
+        startModelPreparation()
+        Task { await requestInitialPermissionsIfNeeded() }
     }
 
     func refreshPermissions() {
@@ -718,38 +721,71 @@ final class AppController {
     }
 
     func startRecording() async {
-        guard case .loadingModel = phase else {
-            breakIfModelUnavailable()
+        guard !isStartingRecording else { return }
 
-            microphoneGranted = await permissionsManager.requestMicrophoneAccess()
-            guard microphoneGranted else {
-                setRecorderIssue(.microphonePermissionRequired)
-                return
-            }
-
-            do {
-                let switchedInputDevice = prepareInputDeviceForRecording()
-                recordingDuration = 0
-                lastTranscript = ""
-                pendingInsertionTarget = insertionService.captureTargetContext()
-                resetWaveform(active: true)
-                try await startRecorderWithRecovery(afterSwitchingInputDevice: switchedInputDevice)
-                statusText = "Listening…"
-                phase = .recording
-            } catch {
-                handleRecordingStartFailure()
-                if let recorderError = error as? AudioRecorderService.RecorderError {
-                    setError(recorderError.errorDescription ?? "Failed to start recording.")
-                } else {
-                    setError("Failed to start recording.")
-                }
-            }
-
+        guard phase != .loadingModel else {
+            statusText = "Still loading the local model…"
             return
         }
 
-        statusText = "Still loading the local model…"
+        guard phase != .recording, phase != .transcribing else { return }
+
+        isStartingRecording = true
+        defer { isStartingRecording = false }
+
+        breakIfModelUnavailable()
+
+        microphoneGranted = await permissionsManager.requestMicrophoneAccess()
+        guard microphoneGranted else {
+            setRecorderIssue(.microphonePermissionRequired)
+            return
+        }
+
+#if DEBUG
+        let voiceProcessingEnabled = appleVoiceProcessingDiagnosticEnabled
+#else
+        let voiceProcessingEnabled = false
+#endif
+
+        do {
+            let switchedInputDevice = prepareInputDeviceForRecording()
+            recordingDuration = 0
+            lastTranscript = ""
+            pendingInsertionTarget = insertionService.captureTargetContext()
+            resetWaveform(active: true)
+
+            try await startRecorderWithRecovery(
+                afterSwitchingInputDevice: switchedInputDevice,
+                voiceProcessingEnabled: voiceProcessingEnabled
+            )
+#if DEBUG
+            if voiceProcessingEnabled {
+                appleVoiceProcessingDiagnosticStatus = "Voice-processed capture started."
+            }
+#endif
+            statusText = "Listening…"
+            phase = .recording
+        } catch {
+            handleRecordingStartFailure()
+#if DEBUG
+            if voiceProcessingEnabled {
+                appleVoiceProcessingDiagnosticStatus = (error as? AudioRecorderService.RecorderError)?.logDescription
+                    ?? Self.diagnosticDescription(for: error)
+                appleVoiceProcessingDiagnosticEnabled = false
+            }
+#endif
+            let message = (error as? AudioRecorderService.RecorderError)?.errorDescription
+                ?? "Failed to start recording."
+            setRecorderIssue(.recordingStartFailed(message))
+        }
     }
+
+#if DEBUG
+    private static func diagnosticDescription(for error: Error) -> String {
+        let error = error as NSError
+        return "recorder.start: \(error.domain) (\(error.code)): \(error.localizedDescription)"
+    }
+#endif
 
     func stopRecording() {
         guard phase == .recording else {
@@ -762,17 +798,20 @@ final class AppController {
     }
 
     func cancelRecording() {
-        guard phase == .recording else {
+        switch phase {
+        case .recording:
+            recorder.cancel()
+            restoreSystemInputAfterRecordingIfNeeded()
+            pendingInsertionTarget = nil
+            recordingDuration = 0
+            resetWaveform(active: false)
+            phase = transcriptionEngine == nil ? .loadingModel : .ready
+            statusText = idleStatusText
+        case .transcribing:
+            transcriptionTask?.cancel()
+        default:
             return
         }
-
-        recorder.cancel()
-        restoreSystemInputAfterRecordingIfNeeded()
-        pendingInsertionTarget = nil
-        recordingDuration = 0
-        resetWaveform(active: false)
-        phase = whisperEngine == nil ? .loadingModel : .ready
-        statusText = idleStatusText
     }
 
     func clearHistory() {
@@ -903,7 +942,7 @@ final class AppController {
 
     func reinsert(_ entry: TranscriptEntry) {
         Task { @MainActor in
-            _ = await insertionService.insert(entry.text)
+            _ = try? await insertionService.insert(entry.text)
         }
     }
 
@@ -914,9 +953,10 @@ final class AppController {
             self.pushWaveform(level: CGFloat(level))
         }
 
-        recorder.onFinish = { [weak self] url in
-            Task { @MainActor [weak self] in
-                await self?.transcribeAndInsert(from: url)
+        recorder.onFinish = { [weak self] url, configuration in
+            guard let self else { return }
+            self.transcriptionTask = Task { @MainActor [weak self] in
+                await self?.transcribeAndInsert(from: url, audioConfiguration: configuration)
             }
         }
 
@@ -1010,35 +1050,6 @@ final class AppController {
         wordDictionary.map(\.text)
     }
 
-    private var preferredTranscriptionPrompt: String? {
-        guard !wordDictionary.isEmpty else {
-            return nil
-        }
-
-        var selectedTerms: [String] = []
-        var characterBudget = 0
-        let orderedTerms = wordDictionary
-            .sorted { $0.createdAt > $1.createdAt }
-            .map(\.text)
-
-        for term in orderedTerms {
-            let separatorCost = selectedTerms.isEmpty ? 0 : 2
-            let nextCost = characterBudget + separatorCost + term.count
-            guard nextCost <= 320 else {
-                break
-            }
-
-            selectedTerms.append(term)
-            characterBudget = nextCost
-        }
-
-        guard !selectedTerms.isEmpty else {
-            return nil
-        }
-
-        return "Preferred spellings: \(selectedTerms.joined(separator: ", "))"
-    }
-
     private func prepareInputDeviceForRecording() -> Bool {
         refreshInputDevices()
         preRecordingSystemDefaultInputDeviceID = nil
@@ -1075,7 +1086,10 @@ final class AppController {
         }
     }
 
-    private func startRecorderWithRecovery(afterSwitchingInputDevice switchedInputDevice: Bool) async throws {
+    private func startRecorderWithRecovery(
+        afterSwitchingInputDevice switchedInputDevice: Bool,
+        voiceProcessingEnabled: Bool
+    ) async throws {
         if switchedInputDevice {
             try? await Task.sleep(for: .milliseconds(220))
             refreshInputDevices()
@@ -1086,13 +1100,17 @@ final class AppController {
 
         for attempt in 0..<3 {
             do {
-                try recorder.start()
+                try recorder.start(voiceProcessingEnabled: voiceProcessingEnabled)
                 return
             } catch let recorderError as AudioRecorderService.RecorderError {
                 lastError = recorderError
                 NSLog("Recorder start attempt %d failed: %@", attempt + 1, recorderError.logDescription)
 
-                guard attempt < 2 else {
+                if case .alreadyRecording = recorderError {
+                    throw recorderError
+                }
+
+                guard !voiceProcessingEnabled, attempt < 2 else {
                     throw recorderError
                 }
 
@@ -1103,7 +1121,7 @@ final class AppController {
                 lastError = error
                 NSLog("Recorder start attempt %d failed with unexpected error: %@", attempt + 1, error.localizedDescription)
 
-                guard attempt < 2 else {
+                guard !voiceProcessingEnabled, attempt < 2 else {
                     throw error
                 }
 
@@ -1150,23 +1168,119 @@ final class AppController {
     }
 
     private func preloadModel() async {
-        guard let modelURL = preferredSessionModelURL else {
+        guard ModelLocator.hasInstalledPhononModel else {
             enterModelRepairMode()
             startModelSetup()
             return
         }
 
-        modelPath = modelURL.path
-        whisperEngine = WhisperEngine(modelURL: modelURL)
+        modelPath = ModelLocator.phononModelURL.path
+        modelDisplayName = "Phonon-2"
+        let engine = PhononCoreMLEngine(modelURL: ModelLocator.phononModelURL)
+        transcriptionEngine = engine
 
         do {
-            try await whisperEngine?.prepare()
+            let startedAt = Date.timeIntervalSinceReferenceDate
+            try await engine.prepare()
+            guard await speechActivityService.prepare() else {
+                await engine.shutdown()
+                transcriptionEngine = nil
+                showModelPreparationError(RecorderIssue.speechDetectionUnavailable.statusMessage)
+                return
+            }
+            let elapsedMilliseconds = (Date.timeIntervalSinceReferenceDate - startedAt) * 1_000
+            NSLog("WhisperMax ASR model ready: %@ %.0f ms", modelDisplayName, elapsedMilliseconds)
+            modelPreparationError = nil
             phase = .ready
             statusText = idleStatusText
         } catch {
-            handleModelPreparationFailure(for: modelURL)
-            setError("Failed to load the local Whisper model.")
+            await engine.shutdown()
+            transcriptionEngine = nil
+            guard !Task.isCancelled else { return }
+            showModelPreparationError("Failed to prepare the local Phonon model: \(error.localizedDescription)")
         }
+    }
+
+    func retryModelPreparation() {
+        guard modelPreparationError != nil, modelPreparationTask == nil else { return }
+        modelPreparationError = nil
+        phase = .loadingModel
+        statusText = "Checking local model…"
+        let modelURL = ModelLocator.phononModelURL
+        modelPreparationTask = Task { @MainActor [weak self] in
+            guard let self else { return }
+            defer { self.modelPreparationTask = nil }
+
+            let isValid = await Task.detached(priority: .userInitiated) {
+                PhononModelPackage.isValidInstallation(at: modelURL)
+            }.value
+            guard !Task.isCancelled else { return }
+
+            guard isValid else {
+                requiresModelDownloadRepair = true
+                enterModelRepairMode()
+                startModelSetup(forceDownload: true)
+                return
+            }
+
+            await preloadModel()
+        }
+    }
+
+    private func showModelPreparationError(_ message: String) {
+        modelPreparationError = message
+        phase = .loadingModel
+        statusText = message
+    }
+
+    private func startModelPreparation() {
+        guard modelPreparationTask == nil, transcriptionEngine == nil else { return }
+
+        modelPreparationTask = Task { @MainActor [weak self] in
+            await self?.preloadModel()
+            self?.modelPreparationTask = nil
+        }
+    }
+
+    func shutdownTranscriptionEngine() {
+        guard let engine = transcriptionEngine else { return }
+        transcriptionTask?.cancel()
+        transcriptionEngine = nil
+        let activeTranscription = transcriptionTask
+        let shutdownID = UUID()
+        let shutdownTask = Task { @MainActor in
+            if let activeTranscription {
+                await activeTranscription.value
+            }
+            await engine.shutdown()
+        }
+        transcriptionShutdown = (shutdownID, shutdownTask)
+    }
+
+    func shutdownTranscriptionEngineAndWait() async {
+        let engineBeingPrepared = transcriptionEngine
+        modelPreparationTask?.cancel()
+        if let modelPreparationTask {
+            await modelPreparationTask.value
+            self.modelPreparationTask = nil
+        }
+
+        transcriptionTask?.cancel()
+        if let transcriptionTask {
+            await transcriptionTask.value
+            self.transcriptionTask = nil
+        }
+
+        if let shutdown = transcriptionShutdown {
+            await shutdown.task.value
+            if transcriptionShutdown?.id == shutdown.id {
+                transcriptionShutdown = nil
+            }
+        }
+
+        guard let engine = transcriptionEngine ?? engineBeingPrepared else { return }
+        transcriptionEngine = nil
+        await engine.shutdown()
     }
 
     private func requestInitialPermissionsIfNeeded() async {
@@ -1179,105 +1293,148 @@ final class AppController {
         refreshPermissions()
     }
 
-    private func transcribeAndInsert(from url: URL) async {
+    private func transcribeAndInsert(
+        from url: URL,
+        audioConfiguration: AudioCaptureConfiguration
+    ) async {
         defer {
+            let wasCancelled = Task.isCancelled
             try? FileManager.default.removeItem(at: url)
             restoreSystemInputAfterRecordingIfNeeded()
             pendingInsertionTarget = nil
+            transcriptionTask = nil
+            if wasCancelled {
+                phase = transcriptionEngine == nil ? .loadingModel : .ready
+                statusText = idleStatusText
+                recordingDuration = 0
+                resetWaveform(active: false)
+            }
         }
 
-        guard let whisperEngine else {
+        guard let transcriptionEngine else {
             captureDebugRecording(
                 from: url,
+                audioConfiguration: audioConfiguration,
                 result: .error,
                 transcript: nil,
                 insertionMethod: nil,
                 issueMessage: nil,
-                errorMessage: "The local Whisper engine is not ready.",
+                errorMessage: "The local speech model is not ready.",
                 diagnostics: nil,
                 chunks: [],
                 transcriptionPasses: []
             )
-            setError("The local Whisper engine is not ready.")
+            setError("The local speech model is not ready.")
             return
         }
 
         do {
-            let preparedAudio = try speechActivityService.prepareTranscriptionAudio(from: url)
-            let cleanedTranscript: String
-            let includeTokenDiagnostics = debugRecordingStore.isEnabled
-            var transcriptionPasses: [DebugRecordingTranscriptionPass] = []
+#if DEBUG
+            let diagnoseVoiceProcessing = appleVoiceProcessingDiagnosticEnabled
+            let bypassSpeechGate = speechGateBypassDiagnosticEnabled
+#else
+            let diagnoseVoiceProcessing = false
+            let bypassSpeechGate = false
+#endif
+            let diagnostics = try await speechActivityService.analyzeSpeech(from: url)
+            let debugChunkPlans: [DebugRecordingChunkPlan] = []
 
-            switch preparedAudio {
-            case .noSpeech:
+#if DEBUG
+            if diagnoseVoiceProcessing || bypassSpeechGate {
+                let peakProbability = diagnostics.speechRegions.map(\.maxProbability).max() ?? 0
+                appleVoiceProcessingDiagnosticStatus = String(
+                    format: "Capture voice processing %@ · %.0f Hz / %u ch · VAD %@, %d regions, max %.2f · gate %@.",
+                    audioConfiguration.voiceProcessingEnabled ? "active" : "inactive",
+                    audioConfiguration.sampleRate,
+                    audioConfiguration.channelCount,
+                    diagnostics.mode.rawValue,
+                    diagnostics.speechRegions.count,
+                    peakProbability,
+                    bypassSpeechGate ? "bypassed" : "enforced"
+                )
+            }
+#endif
+
+            guard diagnostics.mode != .bypass || bypassSpeechGate else {
+                let issue = RecorderIssue.speechDetectionUnavailable
                 captureDebugRecording(
                     from: url,
+                    audioConfiguration: audioConfiguration,
+                    result: .error,
+                    transcript: nil,
+                    insertionMethod: nil,
+                    issueMessage: issue.statusMessage,
+                    errorMessage: nil,
+                    diagnostics: diagnostics,
+                    chunks: debugChunkPlans,
+                    transcriptionPasses: []
+                )
+                setRecorderIssue(issue)
+                return
+            }
+
+            let hasDetectedSpeech = diagnostics.speechRegions.contains(where: {
+                $0.maxProbability >= SpeechGate.minimumPeakProbability
+            })
+            guard hasDetectedSpeech || bypassSpeechGate else {
+                captureDebugRecording(
+                    from: url,
+                    audioConfiguration: audioConfiguration,
                     result: .noSpeech,
                     transcript: nil,
                     insertionMethod: nil,
                     issueMessage: RecorderIssue.noSpeechDetected.statusMessage,
                     errorMessage: nil,
-                    diagnostics: preparedAudio.diagnostics,
-                    chunks: preparedAudio.debugChunkPlans,
+                    diagnostics: diagnostics,
+                    chunks: debugChunkPlans,
                     transcriptionPasses: []
                 )
                 setNoSpeechDetected()
                 return
-            case .singlePass(let samples, let diagnostics):
-                let execution = try await transcribeSinglePass(
-                    samples: samples,
-                    using: whisperEngine,
-                    includeTokenDiagnostics: includeTokenDiagnostics,
-                    mode: diagnostics.mode
-                )
-                transcriptionPasses = execution.debugPasses
-
-                guard let transcript = execution.text else {
-                    captureDebugRecording(
-                        from: url,
-                        result: .noSpeech,
-                        transcript: nil,
-                        insertionMethod: nil,
-                        issueMessage: RecorderIssue.noSpeechDetected.statusMessage,
-                        errorMessage: nil,
-                        diagnostics: preparedAudio.diagnostics,
-                        chunks: preparedAudio.debugChunkPlans,
-                        transcriptionPasses: transcriptionPasses
-                    )
-                    setNoSpeechDetected()
-                    return
-                }
-                cleanedTranscript = transcript
-            case .chunked(let chunks, _):
-                let execution = try await transcribeChunked(
-                    chunks: chunks,
-                    using: whisperEngine,
-                    includeTokenDiagnostics: includeTokenDiagnostics
-                )
-                transcriptionPasses = execution.debugPasses
-
-                guard let transcript = execution.text else {
-                    captureDebugRecording(
-                        from: url,
-                        result: .noSpeech,
-                        transcript: nil,
-                        insertionMethod: nil,
-                        issueMessage: RecorderIssue.noSpeechDetected.statusMessage,
-                        errorMessage: nil,
-                        diagnostics: preparedAudio.diagnostics,
-                        chunks: preparedAudio.debugChunkPlans,
-                        transcriptionPasses: transcriptionPasses
-                    )
-                    setNoSpeechDetected()
-                    return
-                }
-                cleanedTranscript = transcript
             }
 
-            let insertionMethod = await insertionService.insert(cleanedTranscript, target: pendingInsertionTarget)
+            let output = try await transcriptionEngine.transcribe(url: url)
+            NSLog("WhisperMax ASR warm inference: %@ %.0f ms", modelDisplayName, output.inferenceDuration * 1_000)
+
+            let cleanedTranscript = TranscriptFormatter.normalize(
+                output.text,
+                preferredTerms: preferredTranscriptionTerms
+            )
+            guard !cleanedTranscript.isEmpty else {
+#if DEBUG
+                if bypassSpeechGate {
+                    appleVoiceProcessingDiagnosticStatus = "VAD gate bypassed; Phonon returned no text."
+                }
+#endif
+                captureDebugRecording(
+                    from: url,
+                    audioConfiguration: audioConfiguration,
+                    result: .noSpeech,
+                    transcript: nil,
+                    insertionMethod: nil,
+                    issueMessage: RecorderIssue.noSpeechDetected.statusMessage,
+                    errorMessage: nil,
+                    diagnostics: diagnostics,
+                    chunks: debugChunkPlans,
+                    transcriptionPasses: []
+                )
+                setNoSpeechDetected()
+                return
+            }
+
+            let transcriptionPasses = [DebugRecordingTranscriptionPass(
+                index: 0,
+                accepted: true,
+                transcript: cleanedTranscript,
+                selectedDuration: diagnostics.originalDuration
+            )]
+
+            try Task.checkCancellation()
+            let insertionMethod = try await insertionService.insert(cleanedTranscript, target: pendingInsertionTarget)
+            try Task.checkCancellation()
             lastTranscript = cleanedTranscript
             let storesInsertionTarget = insertionMethod != .copied
-            let audioDuration = preparedAudio.diagnostics.originalDuration
+            let audioDuration = diagnostics.originalDuration
 
             let entry = TranscriptEntry(
                 id: UUID(),
@@ -1293,6 +1450,11 @@ final class AppController {
             history.insert(entry, at: 0)
             saveHistory()
 
+            if let startedAt = transcribingAnimationStartTime {
+                let elapsedMilliseconds = (Date.timeIntervalSinceReferenceDate - startedAt) * 1_000
+                NSLog("WhisperMax ASR stop-to-insert: %@ %.0f ms", modelDisplayName, elapsedMilliseconds)
+            }
+
             switch insertionMethod {
             case .accessibility, .clipboard:
                 statusText = insertionStatusText(verb: "Pasted", target: pendingInsertionTarget)
@@ -1301,13 +1463,14 @@ final class AppController {
             }
             captureDebugRecording(
                 from: url,
+                audioConfiguration: audioConfiguration,
                 result: debugCaptureResult(for: insertionMethod),
                 transcript: cleanedTranscript,
                 insertionMethod: insertionMethod,
                 issueMessage: nil,
                 errorMessage: nil,
-                diagnostics: preparedAudio.diagnostics,
-                chunks: preparedAudio.debugChunkPlans,
+                diagnostics: diagnostics,
+                chunks: debugChunkPlans,
                 transcriptionPasses: transcriptionPasses
             )
             insertionTargetName = insertionMethod == .copied ? nil : pendingInsertionTarget?.displayName
@@ -1315,8 +1478,10 @@ final class AppController {
             phase = .inserted(insertionMethod)
             transitionToReady(after: 0.9)
         } catch {
+            guard !Task.isCancelled else { return }
             captureDebugRecording(
                 from: url,
+                audioConfiguration: audioConfiguration,
                 result: .error,
                 transcript: nil,
                 insertionMethod: nil,
@@ -1330,138 +1495,8 @@ final class AppController {
         }
     }
 
-    private struct TranscriptionExecution {
-        let text: String?
-        let debugPasses: [DebugRecordingTranscriptionPass]
-    }
-
-    private func transcribeSinglePass(
-        samples: [Float],
-        using whisperEngine: WhisperEngine,
-        includeTokenDiagnostics: Bool,
-        mode: SpeechActivityDiagnostics.Mode
-    ) async throws -> TranscriptionExecution {
-        let result = try await whisperEngine.transcribe(
-            samples: samples,
-            prompt: preferredTranscriptionPrompt,
-            includeTokenDiagnostics: includeTokenDiagnostics
-        )
-
-        let cleaned = TranscriptFormatter.normalize(
-            result.text,
-            preferredTerms: preferredTranscriptionTerms
-        )
-
-        let selectedDuration = Double(samples.count) / AudioSampleDecoder.targetSampleRate
-        let shouldReject = cleaned.isEmpty || TranscriptionChunkPolicy.shouldRejectSinglePass(
-            result: result,
-            text: cleaned,
-            selectedDuration: selectedDuration,
-            mode: mode
-        )
-
-        return TranscriptionExecution(
-            text: shouldReject ? nil : cleaned,
-            debugPasses: [
-                makeDebugTranscriptionPass(
-                    index: 0,
-                    accepted: !shouldReject,
-                    transcript: cleaned,
-                    selectedDuration: selectedDuration,
-                    result: result
-                )
-            ]
-        )
-    }
-
-    private func transcribeChunked(
-        chunks: [SpeechChunk],
-        using whisperEngine: WhisperEngine,
-        includeTokenDiagnostics: Bool
-    ) async throws -> TranscriptionExecution {
-        var chunkTexts: [String] = []
-        chunkTexts.reserveCapacity(chunks.count)
-        var rollingContext = preferredTranscriptionPrompt ?? ""
-        var debugPasses: [DebugRecordingTranscriptionPass] = []
-        debugPasses.reserveCapacity(chunks.count)
-
-        for (index, chunk) in chunks.enumerated() {
-            let result = try await whisperEngine.transcribe(
-                samples: chunk.samples,
-                prompt: composeChunkPrompt(basePrompt: preferredTranscriptionPrompt, rollingContext: rollingContext),
-                includeTokenDiagnostics: includeTokenDiagnostics
-            )
-
-            let cleaned = TranscriptFormatter.normalize(
-                result.text,
-                preferredTerms: preferredTranscriptionTerms
-            )
-
-            let shouldReject = cleaned.isEmpty || TranscriptionChunkPolicy.shouldReject(
-                result: result,
-                text: cleaned,
-                chunk: chunk
-            )
-            debugPasses.append(
-                makeDebugTranscriptionPass(
-                    index: index,
-                    accepted: !shouldReject,
-                    transcript: cleaned,
-                    selectedDuration: chunk.duration,
-                    result: result
-                )
-            )
-
-            guard !cleaned.isEmpty else {
-                continue
-            }
-
-            if shouldReject {
-                continue
-            }
-
-            chunkTexts.append(cleaned)
-            rollingContext = updatedChunkContext(from: chunkTexts)
-        }
-
-        let stitched = TranscriptFormatter.stitch(
-            chunkTexts,
-            preferredTerms: preferredTranscriptionTerms
-        )
-
-        return TranscriptionExecution(
-            text: stitched.isEmpty ? nil : stitched,
-            debugPasses: debugPasses
-        )
-    }
-
-    private func composeChunkPrompt(basePrompt: String?, rollingContext: String) -> String? {
-        let base = basePrompt?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        let context = rollingContext.trimmingCharacters(in: .whitespacesAndNewlines)
-
-        switch (base.isEmpty, context.isEmpty) {
-        case (true, true):
-            return nil
-        case (false, true):
-            return base
-        case (true, false):
-            return context
-        case (false, false):
-            return "\(base)\n\nRecent transcript context:\n\(context)"
-        }
-    }
-
-    private func updatedChunkContext(from chunkTexts: [String]) -> String {
-        guard let lastText = chunkTexts.last else {
-            return ""
-        }
-
-        let tokens = lastText.split(whereSeparator: \.isWhitespace)
-        let window = tokens.suffix(36)
-        return window.joined(separator: " ")
-    }
     private func breakIfModelUnavailable() {
-        if whisperEngine == nil {
+        if transcriptionEngine == nil {
             statusText = "The model is still loading."
         }
     }
@@ -1510,7 +1545,7 @@ final class AppController {
         DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
             guard let self else { return }
             guard self.phase != .recording, self.phase != .transcribing else { return }
-            self.phase = self.whisperEngine == nil ? .loadingModel : .ready
+            self.phase = self.transcriptionEngine == nil ? .loadingModel : .ready
             self.statusText = self.idleStatusText
             self.insertionTargetName = nil
             self.insertionTargetIcon = nil
@@ -1532,7 +1567,7 @@ final class AppController {
             return "Grant microphone access to start dictation."
         }
 
-        return whisperEngine == nil ? "Loading local model..." : "Ready when you are"
+        return transcriptionEngine == nil ? "Loading local model..." : "Ready when you are"
     }
 
     private func syncPermissionState() {
@@ -1566,30 +1601,20 @@ final class AppController {
     }
 
     private var hasUsableModelAvailable: Bool {
-        availableModelSource != nil
-    }
-
-    private var availableModelSource: ModelSource? {
-        if canUseModel(at: ModelLocator.appLocalModelURL) {
-            return .ownPath
-        }
-
-        if canUseModel(at: ModelLocator.superwhisperModelURL) {
-            return .superwhisper
-        }
-
-        return nil
+        ModelLocator.hasInstalledPhononModel
     }
 
     private func beginModelDownload() {
         modelSetupState = .downloading(0)
     }
 
-    private func markModelSetupReady(_ source: ModelSource) {
+    private func markModelSetupReady() {
         modelDownloader = nil
-        try? FileManager.default.removeItem(at: ModelLocator.downloadResumeDataURL)
-        invalidModelPathsForSession.remove(ModelLocator.appLocalModelURL.path)
-        modelSetupState = .ready(source)
+        requiresModelDownloadRepair = false
+        try? FileManager.default.removeItem(at: ModelLocator.phononDownloadResumeDataURL)
+        try? FileManager.default.removeItem(at: ModelLocator.phononDownloadResumeAssetURL)
+        modelSetupState = .ready
+        startModelPreparation()
     }
 
     private func enterModelRepairMode() {
@@ -1597,42 +1622,11 @@ final class AppController {
         onboardingMode = .modelRepair
         onboardingStep = .download
         modelSetupState = .idle
-        whisperEngine = nil
+        modelPreparationError = nil
+        shutdownTranscriptionEngine()
         modelPath = ""
         phase = .loadingModel
         statusText = "Speech model needs to be set up again."
-    }
-
-    private var preferredSessionModelURL: URL? {
-        if canUseModel(at: ModelLocator.appLocalModelURL) {
-            return ModelLocator.appLocalModelURL
-        }
-
-        if canUseModel(at: ModelLocator.superwhisperModelURL) {
-            return ModelLocator.superwhisperModelURL
-        }
-
-        return nil
-    }
-
-    private func canUseModel(at url: URL) -> Bool {
-        guard !invalidModelPathsForSession.contains(url.path) else {
-            return false
-        }
-
-        return FileManager.default.fileExists(atPath: url.path)
-    }
-
-    private func handleModelPreparationFailure(for modelURL: URL) {
-        invalidModelPathsForSession.insert(modelURL.path)
-
-        if modelURL == ModelLocator.appLocalModelURL {
-            try? FileManager.default.removeItem(at: modelURL)
-        }
-
-        whisperEngine = nil
-        enterModelRepairMode()
-        startModelSetup()
     }
 
     private func migratePinnedInputPreferenceIfNeeded() {
@@ -1670,6 +1664,7 @@ final class AppController {
 
     private func captureDebugRecording(
         from audioURL: URL,
+        audioConfiguration: AudioCaptureConfiguration,
         result: DebugRecordingCaptureResult,
         transcript: String?,
         insertionMethod: InsertionMethod?,
@@ -1687,29 +1682,11 @@ final class AppController {
             insertionMethod: insertionMethod,
             issueMessage: issueMessage,
             errorMessage: errorMessage,
+            audioConfiguration: audioConfiguration,
             diagnostics: diagnostics,
             chunks: chunks,
             transcriptionPasses: transcriptionPasses
         )
     }
 
-    private func makeDebugTranscriptionPass(
-        index: Int,
-        accepted: Bool,
-        transcript: String,
-        selectedDuration: TimeInterval,
-        result: TranscriptionResult
-    ) -> DebugRecordingTranscriptionPass {
-        DebugRecordingTranscriptionPass(
-            index: index,
-            accepted: accepted,
-            transcript: transcript,
-            selectedDuration: selectedDuration,
-            averageNoSpeechProbability: result.averageNoSpeechProbability,
-            maxNoSpeechProbability: result.maxNoSpeechProbability,
-            averageTokenProbability: result.averageTokenProbability,
-            segmentCount: result.segmentCount,
-            segmentDiagnostics: result.segmentDiagnostics ?? []
-        )
-    }
 }

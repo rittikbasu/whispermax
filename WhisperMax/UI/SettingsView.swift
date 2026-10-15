@@ -1,4 +1,5 @@
 import AppKit
+import AVFoundation
 import SwiftUI
 
 // MARK: - Theme
@@ -31,6 +32,9 @@ struct SettingsSection: View {
             TriggerSettingsCard()
             ModelSettingsCard()
             InputSettingsCard()
+#if DEBUG
+            AppleVoiceProcessingSettingsCard()
+#endif
             HistorySettingsCard()
             PermissionsSettingsCard()
             AboutSettingsCard()
@@ -165,8 +169,33 @@ private enum ModelFileInspector {
     static func byteSize(at path: String) -> Int64? {
         guard !path.isEmpty else { return nil }
         let url = URL(fileURLWithPath: path)
-        let values = try? url.resourceValues(forKeys: [.fileSizeKey])
-        return values?.fileSize.map(Int64.init)
+        guard let values = try? url.resourceValues(forKeys: [.isDirectoryKey, .fileSizeKey]) else {
+            return nil
+        }
+        if values.isDirectory != true {
+            return values.fileSize.map(Int64.init)
+        }
+
+        guard let files = FileManager.default.enumerator(
+            at: url,
+            includingPropertiesForKeys: [.isRegularFileKey, .fileSizeKey]
+        ) else {
+            return nil
+        }
+
+        var total: Int64 = 0
+        var foundFile = false
+        for case let fileURL as URL in files {
+            guard let file = try? fileURL.resourceValues(forKeys: [.isRegularFileKey, .fileSizeKey]),
+                  file.isRegularFile == true,
+                  let size = file.fileSize
+            else {
+                continue
+            }
+            foundFile = true
+            total += Int64(size)
+        }
+        return foundFile ? total : nil
     }
 }
 
@@ -218,6 +247,111 @@ private struct InputSettingsCard: View {
         }
     }
 }
+
+#if DEBUG
+private struct AppleVoiceProcessingSettingsCard: View {
+    @Environment(AppController.self) private var controller
+    @AppStorage("RetainDebugRecordings") private var retainAudioLocally = false
+    @AppStorage("AppleVoiceProcessingDiagnosticStatus") private var diagnosticStatus = "No voice-processing attempt yet."
+    @State private var microphoneModeStatus = "Refresh to check the active mode."
+
+    var body: some View {
+        SettingsCard(title: "AUDIO EXPERIMENT · DEBUG BUILD") {
+            VStack(alignment: .leading, spacing: 14) {
+                Toggle(isOn: Binding(
+                    get: { controller.appleVoiceProcessingDiagnosticEnabled },
+                    set: { controller.appleVoiceProcessingDiagnosticEnabled = $0 }
+                )) {
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text("Voice Processing I/O")
+                            .font(.system(size: 14, weight: .semibold))
+                            .foregroundStyle(SettingsTheme.primaryText)
+                        Text("Enable AVAudioEngine voice processing. This is separate from the system Mic Mode.")
+                            .font(.system(size: 12, weight: .regular))
+                            .foregroundStyle(SettingsTheme.secondaryText)
+                    }
+                }
+                .toggleStyle(.switch)
+
+                Toggle(isOn: Binding(
+                    get: { controller.speechGateBypassDiagnosticEnabled },
+                    set: { controller.speechGateBypassDiagnosticEnabled = $0 }
+                )) {
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text("Bypass VAD gate")
+                            .font(.system(size: 14, weight: .semibold))
+                            .foregroundStyle(SettingsTheme.primaryText)
+                        Text("Transcribe the full take even when speech detection rejects it.")
+                            .font(.system(size: 12, weight: .regular))
+                            .foregroundStyle(SettingsTheme.secondaryText)
+                    }
+                }
+                .toggleStyle(.switch)
+
+                HStack(spacing: 10) {
+                    Button("Microphone Modes…") {
+                        AVCaptureDevice.showSystemUserInterface(.microphoneModes)
+                    }
+                    .disabled(!controller.appleVoiceProcessingDiagnosticEnabled)
+
+                    Button("Refresh mode") {
+                        refreshMicrophoneMode()
+                    }
+                    .disabled(!controller.appleVoiceProcessingDiagnosticEnabled)
+
+                    Text(microphoneModeStatus)
+                        .font(.system(size: 11.5, weight: .regular))
+                        .foregroundStyle(SettingsTheme.secondaryText)
+                        .lineLimit(2)
+                }
+
+                Text(diagnosticStatus)
+                    .font(.system(size: 11, weight: .regular, design: .monospaced))
+                    .foregroundStyle(SettingsTheme.secondaryText)
+                    .lineLimit(3)
+                    .textSelection(.enabled)
+
+                Toggle("Keep test audio and transcripts on this Mac", isOn: $retainAudioLocally)
+                    .font(.system(size: 12.5, weight: .medium))
+                    .toggleStyle(.checkbox)
+
+                HStack {
+                    Text("Saved in WhisperMax’s local DebugRecordings folder.")
+                        .font(.system(size: 11.5, weight: .regular))
+                        .foregroundStyle(SettingsTheme.secondaryText)
+
+                    Spacer()
+
+                    Button("Open folder") {
+                        let folder = ModelLocator.debugRecordingsDirectory
+                        try? FileManager.default.createDirectory(
+                            at: folder,
+                            withIntermediateDirectories: true
+                        )
+                        NSWorkspace.shared.open(folder)
+                    }
+                    .disabled(!retainAudioLocally)
+                }
+            }
+            .buttonStyle(.borderless)
+            .onAppear(perform: refreshMicrophoneMode)
+        }
+    }
+
+    private func refreshMicrophoneMode() {
+        microphoneModeStatus = "Preferred: \(name(for: AVCaptureDevice.preferredMicrophoneMode)) · Active: \(name(for: AVCaptureDevice.activeMicrophoneMode))"
+    }
+
+    private func name(for mode: AVCaptureDevice.MicrophoneMode) -> String {
+        switch mode {
+        case .standard: "Standard"
+        case .voiceIsolation: "Voice Isolation"
+        case .wideSpectrum: "Wide Spectrum"
+        @unknown default: "Unknown"
+        }
+    }
+}
+#endif
 
 private struct InputPickerButton: View {
     let label: String

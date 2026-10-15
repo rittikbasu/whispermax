@@ -1,18 +1,32 @@
 import AVFoundation
 import Foundation
 
+struct AudioCaptureConfiguration: Codable, Sendable {
+    let voiceProcessingEnabled: Bool
+    let preferredMicrophoneMode: String
+    let activeMicrophoneMode: String
+    let sampleRate: Double
+    let channelCount: UInt32
+}
+
 final class AudioRecorderService {
     enum RecorderError: LocalizedError {
         case inputUnavailable(sampleRate: Double, channelCount: AVAudioChannelCount)
+        case voiceProcessingUnavailable(String)
         case engineStartFailed(String)
+        case alreadyRecording
         case couldNotStartRecording
 
         var errorDescription: String? {
             switch self {
             case .inputUnavailable:
                 return "Audio input is still switching. Try again in a moment."
+            case .voiceProcessingUnavailable:
+                return "Apple voice processing could not start with this microphone. Turn it off and try again."
             case .engineStartFailed:
                 return "Audio input could not start. Try again in a moment."
+            case .alreadyRecording:
+                return "A recording is already in progress."
             case .couldNotStartRecording:
                 return "Could not start recording."
             }
@@ -22,8 +36,12 @@ final class AudioRecorderService {
             switch self {
             case .inputUnavailable(let sampleRate, let channelCount):
                 return "input unavailable (sampleRate=\(sampleRate), channelCount=\(channelCount))"
+            case .voiceProcessingUnavailable(let message):
+                return "Apple voice processing unavailable (\(message))"
             case .engineStartFailed(let message):
                 return "engine start failed (\(message))"
+            case .alreadyRecording:
+                return "recording already in progress"
             case .couldNotStartRecording:
                 return "could not start recording"
             }
@@ -35,7 +53,9 @@ final class AudioRecorderService {
     private var engine: AVAudioEngine?
     private var recordingFile: AVAudioFile?
     private var recordingURL: URL?
+    private var captureConfiguration: AudioCaptureConfiguration?
     private var shouldDiscardCurrentRecording = false
+    private var isStarting = false
     private var isRecording = false
     private var recordedDuration: TimeInterval = 0
     private var lastMeterEmissionTime: TimeInterval = 0
@@ -44,10 +64,24 @@ final class AudioRecorderService {
     private var recentRMSDB: [Float] = []
 
     var onMeter: (@MainActor @Sendable (Float, TimeInterval) -> Void)?
-    var onFinish: (@MainActor @Sendable (URL) -> Void)?
+    var onFinish: (@MainActor @Sendable (URL, AudioCaptureConfiguration) -> Void)?
     var onError: (@MainActor @Sendable (String) -> Void)?
 
-    func start() throws {
+    func start(voiceProcessingEnabled: Bool = false) throws {
+        stateLock.lock()
+        guard !isStarting, !isRecording else {
+            stateLock.unlock()
+            throw RecorderError.alreadyRecording
+        }
+        isStarting = true
+        stateLock.unlock()
+
+        defer {
+            stateLock.lock()
+            isStarting = false
+            stateLock.unlock()
+        }
+
         try ModelLocator.prepareDirectories()
 
         let url = ModelLocator.temporaryRecordingsDirectory
@@ -56,17 +90,50 @@ final class AudioRecorderService {
 
         let engine = AVAudioEngine()
         let inputNode = engine.inputNode
-        let hardwareFormat = inputNode.outputFormat(forBus: 0)
 
-        guard
-            hardwareFormat.channelCount > 0,
-            hardwareFormat.sampleRate > 0,
-            let inputFormat = AVAudioFormat(
+        if voiceProcessingEnabled {
+            do {
+                try inputNode.setVoiceProcessingEnabled(true)
+            } catch {
+                throw RecorderError.voiceProcessingUnavailable(Self.diagnosticDescription(for: error))
+            }
+        }
+
+        let hardwareFormat = inputNode.outputFormat(forBus: 0)
+        guard hardwareFormat.channelCount > 0, hardwareFormat.sampleRate > 0 else {
+            throw RecorderError.inputUnavailable(
+                sampleRate: hardwareFormat.sampleRate,
+                channelCount: hardwareFormat.channelCount
+            )
+        }
+
+        let outputNode = engine.outputNode
+        let inputFormat: AVAudioFormat?
+
+        if voiceProcessingEnabled {
+            // Voice processing requires matching input and output I/O formats. Keep the
+            // microphone's negotiated multichannel format instead of rebuilding it by count;
+            // AVAudioFormat's channel-count initializer cannot represent more than two channels.
+            inputFormat = hardwareFormat
+            engine.connect(engine.mainMixerNode, to: outputNode, format: hardwareFormat)
+
+            let outputFormat = outputNode.inputFormat(forBus: 0)
+            guard hardwareFormat.isEqual(outputFormat) else {
+                throw RecorderError.voiceProcessingUnavailable(
+                    "I/O format mismatch (input \(Self.formatDescription(hardwareFormat)), output \(Self.formatDescription(outputFormat)))"
+                )
+            }
+        } else {
+            inputFormat = AVAudioFormat(
                 commonFormat: .pcmFormatFloat32,
                 sampleRate: hardwareFormat.sampleRate,
                 channels: hardwareFormat.channelCount,
                 interleaved: false
             )
+        }
+
+        guard
+            let inputFormat
         else {
             throw RecorderError.inputUnavailable(
                 sampleRate: hardwareFormat.sampleRate,
@@ -103,20 +170,34 @@ final class AudioRecorderService {
             self?.handleInputBuffer(buffer)
         }
 
+        let outputFormat = outputNode.inputFormat(forBus: 0)
         do {
             engine.prepare()
             try engine.start()
         } catch {
+            let detail = "\(Self.diagnosticDescription(for: error)); input \(Self.formatDescription(hardwareFormat)), output \(Self.formatDescription(outputFormat))"
             inputNode.removeTap(onBus: 0)
+            engine.stop()
             try? FileManager.default.removeItem(at: url)
             stateLock.lock()
             self.engine = nil
             self.recordingFile = nil
             self.recordingURL = nil
+            self.captureConfiguration = nil
             self.isRecording = false
             stateLock.unlock()
-            throw RecorderError.engineStartFailed(error.localizedDescription)
+            throw RecorderError.engineStartFailed(detail)
         }
+
+        stateLock.lock()
+        captureConfiguration = AudioCaptureConfiguration(
+            voiceProcessingEnabled: inputNode.isVoiceProcessingEnabled,
+            preferredMicrophoneMode: Self.name(for: AVCaptureDevice.preferredMicrophoneMode),
+            activeMicrophoneMode: Self.name(for: AVCaptureDevice.activeMicrophoneMode),
+            sampleRate: hardwareFormat.sampleRate,
+            channelCount: hardwareFormat.channelCount
+        )
+        stateLock.unlock()
     }
 
     func stop() {
@@ -129,6 +210,7 @@ final class AudioRecorderService {
 
     private func finishRecording(discard: Bool) {
         let engine: AVAudioEngine?
+        let captureConfiguration: AudioCaptureConfiguration?
 
         stateLock.lock()
         guard isRecording else {
@@ -138,6 +220,7 @@ final class AudioRecorderService {
 
         shouldDiscardCurrentRecording = discard
         engine = self.engine
+        captureConfiguration = self.captureConfiguration
         stateLock.unlock()
 
         engine?.inputNode.removeTap(onBus: 0)
@@ -152,6 +235,7 @@ final class AudioRecorderService {
         self.engine = nil
         self.recordingFile = nil
         self.recordingURL = nil
+        self.captureConfiguration = nil
         self.shouldDiscardCurrentRecording = false
         self.isRecording = false
         self.recordedDuration = 0
@@ -170,9 +254,35 @@ final class AudioRecorderService {
             return
         }
 
-        Task { @MainActor [onFinish] in
-            onFinish?(url)
+        guard let captureConfiguration else {
+            try? FileManager.default.removeItem(at: url)
+            Task { @MainActor [onError] in
+                onError?("Recording details could not be saved. Please try again.")
+            }
+            return
         }
+
+        Task { @MainActor [onFinish] in
+            onFinish?(url, captureConfiguration)
+        }
+    }
+
+    private static func name(for mode: AVCaptureDevice.MicrophoneMode) -> String {
+        switch mode {
+        case .standard: "standard"
+        case .voiceIsolation: "voiceIsolation"
+        case .wideSpectrum: "wideSpectrum"
+        @unknown default: "unknown"
+        }
+    }
+
+    private static func diagnosticDescription(for error: Error) -> String {
+        let error = error as NSError
+        return "\(error.domain) (\(error.code)): \(error.localizedDescription)"
+    }
+
+    private static func formatDescription(_ format: AVAudioFormat) -> String {
+        "\(format.sampleRate) Hz / \(format.channelCount) ch"
     }
 
     private func handleInputBuffer(_ buffer: AVAudioPCMBuffer) {
@@ -237,6 +347,7 @@ final class AudioRecorderService {
         self.engine = nil
         self.recordingFile = nil
         self.recordingURL = nil
+        self.captureConfiguration = nil
         self.shouldDiscardCurrentRecording = false
         self.isRecording = false
         self.recordedDuration = 0
