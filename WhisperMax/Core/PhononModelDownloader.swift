@@ -27,11 +27,12 @@ final class PhononModelDownloader: NSObject, @unchecked Sendable {
     private var isPausing = false
     private let maximumRetryCount = 3
 
-    init(destinationURL: URL = ModelLocator.phononModelURL) {
-        self.destinationURL = destinationURL
+    override init() {
+        destinationURL = ModelLocator.phononModelURL
         stagingURL = ModelLocator.phononStagingModelURL
         resumeDataURL = ModelLocator.phononDownloadResumeDataURL
         resumeAssetURL = ModelLocator.phononDownloadResumeAssetURL
+        super.init()
     }
 
     func start() {

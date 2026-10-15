@@ -56,6 +56,7 @@ struct DebugRecordingMetadata: Codable, Sendable {
     let issueMessage: String?
     let errorMessage: String?
     let audioFilename: String
+    let audioConfiguration: AudioCaptureConfiguration?
     let diagnostics: DebugRecordingDiagnostics?
     let chunks: [DebugRecordingChunkPlan]
     let transcriptionPasses: [DebugRecordingTranscriptionPass]
@@ -96,6 +97,7 @@ final class DebugRecordingStore {
         insertionMethod: InsertionMethod? = nil,
         issueMessage: String? = nil,
         errorMessage: String? = nil,
+        audioConfiguration: AudioCaptureConfiguration? = nil,
         diagnostics: SpeechActivityDiagnostics? = nil,
         chunks: [DebugRecordingChunkPlan] = [],
         transcriptionPasses: [DebugRecordingTranscriptionPass] = []
@@ -133,6 +135,7 @@ final class DebugRecordingStore {
                 issueMessage: issueMessage,
                 errorMessage: errorMessage,
                 audioFilename: audioFilename,
+                audioConfiguration: audioConfiguration,
                 diagnostics: diagnostics.map(Self.makeDiagnostics),
                 chunks: chunks,
                 transcriptionPasses: transcriptionPasses
@@ -245,6 +248,7 @@ final class DebugRecordingStore {
         insertionMethod: InsertionMethod? = nil,
         issueMessage: String? = nil,
         errorMessage: String? = nil,
+        audioConfiguration: AudioCaptureConfiguration? = nil,
         diagnostics: SpeechActivityDiagnostics? = nil,
         chunks: [DebugRecordingChunkPlan] = [],
         transcriptionPasses: [DebugRecordingTranscriptionPass] = []

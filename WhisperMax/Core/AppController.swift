@@ -38,6 +38,7 @@ enum RecorderIssue: Equatable {
     case microphonePermissionRequired
     case noSpeechDetected
     case speechDetectionUnavailable
+    case recordingStartFailed(String)
     case generic(String)
 
     private var presentation: (statusMessage: String, title: String, subtitle: String?, autoDismissDelay: TimeInterval) {
@@ -62,6 +63,13 @@ enum RecorderIssue: Equatable {
                 "Couldn’t analyze speech",
                 "Restart WhisperMax and try again",
                 3.5
+            )
+        case .recordingStartFailed(let message):
+            return (
+                message,
+                "Couldn’t start recording",
+                "Check your microphone and try again",
+                2.4
             )
         case .generic(let message):
             return (message, "Try again", "Recorder reset", 1.8)
@@ -137,6 +145,7 @@ final class AppController {
     private var requiresModelDownloadRepair = false
     private var transcriptionTask: Task<Void, Never>?
     private var transcriptionShutdown: (id: UUID, task: Task<Void, Never>)?
+    private var isStartingRecording = false
     private var preRecordingSystemDefaultInputDeviceID: AudioObjectID?
     private var recordingPinnedDeviceID: AudioObjectID?
     private var permissionMonitorTask: Task<Void, Never>?
@@ -146,6 +155,16 @@ final class AppController {
     private var pendingDeleteResetTask: Task<Void, Never>?
     private var pendingInsertionTarget: InsertionTargetContext?
     private(set) var transcribingAnimationStartTime: TimeInterval?
+
+#if DEBUG
+    var appleVoiceProcessingDiagnosticEnabled = false
+    var speechGateBypassDiagnosticEnabled = false
+    var appleVoiceProcessingDiagnosticStatus = "No voice-processing attempt yet." {
+        didSet {
+            UserDefaults.standard.set(appleVoiceProcessingDiagnosticStatus, forKey: "AppleVoiceProcessingDiagnosticStatus")
+        }
+    }
+#endif
 
     var phase: RecordingPhase = .loadingModel {
         didSet {
@@ -702,38 +721,71 @@ final class AppController {
     }
 
     func startRecording() async {
-        guard case .loadingModel = phase else {
-            breakIfModelUnavailable()
+        guard !isStartingRecording else { return }
 
-            microphoneGranted = await permissionsManager.requestMicrophoneAccess()
-            guard microphoneGranted else {
-                setRecorderIssue(.microphonePermissionRequired)
-                return
-            }
-
-            do {
-                let switchedInputDevice = prepareInputDeviceForRecording()
-                recordingDuration = 0
-                lastTranscript = ""
-                pendingInsertionTarget = insertionService.captureTargetContext()
-                resetWaveform(active: true)
-                try await startRecorderWithRecovery(afterSwitchingInputDevice: switchedInputDevice)
-                statusText = "Listening…"
-                phase = .recording
-            } catch {
-                handleRecordingStartFailure()
-                if let recorderError = error as? AudioRecorderService.RecorderError {
-                    setError(recorderError.errorDescription ?? "Failed to start recording.")
-                } else {
-                    setError("Failed to start recording.")
-                }
-            }
-
+        guard phase != .loadingModel else {
+            statusText = "Still loading the local model…"
             return
         }
 
-        statusText = "Still loading the local model…"
+        guard phase != .recording, phase != .transcribing else { return }
+
+        isStartingRecording = true
+        defer { isStartingRecording = false }
+
+        breakIfModelUnavailable()
+
+        microphoneGranted = await permissionsManager.requestMicrophoneAccess()
+        guard microphoneGranted else {
+            setRecorderIssue(.microphonePermissionRequired)
+            return
+        }
+
+#if DEBUG
+        let voiceProcessingEnabled = appleVoiceProcessingDiagnosticEnabled
+#else
+        let voiceProcessingEnabled = false
+#endif
+
+        do {
+            let switchedInputDevice = prepareInputDeviceForRecording()
+            recordingDuration = 0
+            lastTranscript = ""
+            pendingInsertionTarget = insertionService.captureTargetContext()
+            resetWaveform(active: true)
+
+            try await startRecorderWithRecovery(
+                afterSwitchingInputDevice: switchedInputDevice,
+                voiceProcessingEnabled: voiceProcessingEnabled
+            )
+#if DEBUG
+            if voiceProcessingEnabled {
+                appleVoiceProcessingDiagnosticStatus = "Voice-processed capture started."
+            }
+#endif
+            statusText = "Listening…"
+            phase = .recording
+        } catch {
+            handleRecordingStartFailure()
+#if DEBUG
+            if voiceProcessingEnabled {
+                appleVoiceProcessingDiagnosticStatus = (error as? AudioRecorderService.RecorderError)?.logDescription
+                    ?? Self.diagnosticDescription(for: error)
+                appleVoiceProcessingDiagnosticEnabled = false
+            }
+#endif
+            let message = (error as? AudioRecorderService.RecorderError)?.errorDescription
+                ?? "Failed to start recording."
+            setRecorderIssue(.recordingStartFailed(message))
+        }
     }
+
+#if DEBUG
+    private static func diagnosticDescription(for error: Error) -> String {
+        let error = error as NSError
+        return "recorder.start: \(error.domain) (\(error.code)): \(error.localizedDescription)"
+    }
+#endif
 
     func stopRecording() {
         guard phase == .recording else {
@@ -901,10 +953,10 @@ final class AppController {
             self.pushWaveform(level: CGFloat(level))
         }
 
-        recorder.onFinish = { [weak self] url in
+        recorder.onFinish = { [weak self] url, configuration in
             guard let self else { return }
             self.transcriptionTask = Task { @MainActor [weak self] in
-                await self?.transcribeAndInsert(from: url)
+                await self?.transcribeAndInsert(from: url, audioConfiguration: configuration)
             }
         }
 
@@ -1034,7 +1086,10 @@ final class AppController {
         }
     }
 
-    private func startRecorderWithRecovery(afterSwitchingInputDevice switchedInputDevice: Bool) async throws {
+    private func startRecorderWithRecovery(
+        afterSwitchingInputDevice switchedInputDevice: Bool,
+        voiceProcessingEnabled: Bool
+    ) async throws {
         if switchedInputDevice {
             try? await Task.sleep(for: .milliseconds(220))
             refreshInputDevices()
@@ -1045,13 +1100,17 @@ final class AppController {
 
         for attempt in 0..<3 {
             do {
-                try recorder.start()
+                try recorder.start(voiceProcessingEnabled: voiceProcessingEnabled)
                 return
             } catch let recorderError as AudioRecorderService.RecorderError {
                 lastError = recorderError
                 NSLog("Recorder start attempt %d failed: %@", attempt + 1, recorderError.logDescription)
 
-                guard attempt < 2 else {
+                if case .alreadyRecording = recorderError {
+                    throw recorderError
+                }
+
+                guard !voiceProcessingEnabled, attempt < 2 else {
                     throw recorderError
                 }
 
@@ -1062,7 +1121,7 @@ final class AppController {
                 lastError = error
                 NSLog("Recorder start attempt %d failed with unexpected error: %@", attempt + 1, error.localizedDescription)
 
-                guard attempt < 2 else {
+                guard !voiceProcessingEnabled, attempt < 2 else {
                     throw error
                 }
 
@@ -1123,7 +1182,7 @@ final class AppController {
         do {
             let startedAt = Date.timeIntervalSinceReferenceDate
             try await engine.prepare()
-            guard await prepareSpeechActivityBeforeReady() else {
+            guard await speechActivityService.prepare() else {
                 await engine.shutdown()
                 transcriptionEngine = nil
                 showModelPreparationError(RecorderIssue.speechDetectionUnavailable.statusMessage)
@@ -1172,10 +1231,6 @@ final class AppController {
         modelPreparationError = message
         phase = .loadingModel
         statusText = message
-    }
-
-    private func prepareSpeechActivityBeforeReady() async -> Bool {
-        await speechActivityService.prepare()
     }
 
     private func startModelPreparation() {
@@ -1238,7 +1293,10 @@ final class AppController {
         refreshPermissions()
     }
 
-    private func transcribeAndInsert(from url: URL) async {
+    private func transcribeAndInsert(
+        from url: URL,
+        audioConfiguration: AudioCaptureConfiguration
+    ) async {
         defer {
             let wasCancelled = Task.isCancelled
             try? FileManager.default.removeItem(at: url)
@@ -1256,6 +1314,7 @@ final class AppController {
         guard let transcriptionEngine else {
             captureDebugRecording(
                 from: url,
+                audioConfiguration: audioConfiguration,
                 result: .error,
                 transcript: nil,
                 insertionMethod: nil,
@@ -1270,13 +1329,37 @@ final class AppController {
         }
 
         do {
+#if DEBUG
+            let diagnoseVoiceProcessing = appleVoiceProcessingDiagnosticEnabled
+            let bypassSpeechGate = speechGateBypassDiagnosticEnabled
+#else
+            let diagnoseVoiceProcessing = false
+            let bypassSpeechGate = false
+#endif
             let diagnostics = try await speechActivityService.analyzeSpeech(from: url)
             let debugChunkPlans: [DebugRecordingChunkPlan] = []
 
-            guard diagnostics.mode != .bypass else {
+#if DEBUG
+            if diagnoseVoiceProcessing || bypassSpeechGate {
+                let peakProbability = diagnostics.speechRegions.map(\.maxProbability).max() ?? 0
+                appleVoiceProcessingDiagnosticStatus = String(
+                    format: "Capture voice processing %@ · %.0f Hz / %u ch · VAD %@, %d regions, max %.2f · gate %@.",
+                    audioConfiguration.voiceProcessingEnabled ? "active" : "inactive",
+                    audioConfiguration.sampleRate,
+                    audioConfiguration.channelCount,
+                    diagnostics.mode.rawValue,
+                    diagnostics.speechRegions.count,
+                    peakProbability,
+                    bypassSpeechGate ? "bypassed" : "enforced"
+                )
+            }
+#endif
+
+            guard diagnostics.mode != .bypass || bypassSpeechGate else {
                 let issue = RecorderIssue.speechDetectionUnavailable
                 captureDebugRecording(
                     from: url,
+                    audioConfiguration: audioConfiguration,
                     result: .error,
                     transcript: nil,
                     insertionMethod: nil,
@@ -1290,11 +1373,13 @@ final class AppController {
                 return
             }
 
-            guard diagnostics.speechRegions.contains(where: {
+            let hasDetectedSpeech = diagnostics.speechRegions.contains(where: {
                 $0.maxProbability >= SpeechGate.minimumPeakProbability
-            }) else {
+            })
+            guard hasDetectedSpeech || bypassSpeechGate else {
                 captureDebugRecording(
                     from: url,
+                    audioConfiguration: audioConfiguration,
                     result: .noSpeech,
                     transcript: nil,
                     insertionMethod: nil,
@@ -1316,8 +1401,14 @@ final class AppController {
                 preferredTerms: preferredTranscriptionTerms
             )
             guard !cleanedTranscript.isEmpty else {
+#if DEBUG
+                if bypassSpeechGate {
+                    appleVoiceProcessingDiagnosticStatus = "VAD gate bypassed; Phonon returned no text."
+                }
+#endif
                 captureDebugRecording(
                     from: url,
+                    audioConfiguration: audioConfiguration,
                     result: .noSpeech,
                     transcript: nil,
                     insertionMethod: nil,
@@ -1372,6 +1463,7 @@ final class AppController {
             }
             captureDebugRecording(
                 from: url,
+                audioConfiguration: audioConfiguration,
                 result: debugCaptureResult(for: insertionMethod),
                 transcript: cleanedTranscript,
                 insertionMethod: insertionMethod,
@@ -1389,6 +1481,7 @@ final class AppController {
             guard !Task.isCancelled else { return }
             captureDebugRecording(
                 from: url,
+                audioConfiguration: audioConfiguration,
                 result: .error,
                 transcript: nil,
                 insertionMethod: nil,
@@ -1571,6 +1664,7 @@ final class AppController {
 
     private func captureDebugRecording(
         from audioURL: URL,
+        audioConfiguration: AudioCaptureConfiguration,
         result: DebugRecordingCaptureResult,
         transcript: String?,
         insertionMethod: InsertionMethod?,
@@ -1588,6 +1682,7 @@ final class AppController {
             insertionMethod: insertionMethod,
             issueMessage: issueMessage,
             errorMessage: errorMessage,
+            audioConfiguration: audioConfiguration,
             diagnostics: diagnostics,
             chunks: chunks,
             transcriptionPasses: transcriptionPasses
