@@ -71,25 +71,8 @@ cleanup() {
 }
 trap cleanup EXIT
 
-detach_existing_volume_mounts() {
-  mount | awk -v volume="/Volumes/$VOLUME_NAME" '
-    {
-      marker = index($0, " on ")
-      if (marker == 0) next
-      rest = substr($0, marker + 4)
-      end = index(rest, " (")
-      if (end == 0) next
-      path = substr(rest, 1, end - 1)
-      if (path == volume || index(path, volume " ") == 1) print path
-    }
-  ' | while read -r mounted_path; do
-    hdiutil detach "$mounted_path" -quiet || true
-  done
-}
-
 mkdir -p "$EXTRACT_DIR" "$STAGING_DIR" "$BACKGROUND_DIR" "$DIST_DIR"
 rm -f "$DMG_PATH" "$DMG_CHECKSUM_PATH" "$STABLE_DMG_PATH" "$STABLE_DMG_CHECKSUM_PATH"
-detach_existing_volume_mounts
 
 ditto -x -k "$ZIP_PATH" "$EXTRACT_DIR"
 

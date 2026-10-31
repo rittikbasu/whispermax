@@ -166,6 +166,10 @@ private struct RecorderControlRail: View {
                 .monospacedDigit()
                 .font(.system(size: 16, weight: .semibold))
                 .foregroundStyle(.white.opacity(0.96))
+        case .starting:
+            RecorderStateLabel(title: "Starting…")
+        case .cancellingStart:
+            RecorderStateLabel(title: "Cancelling…")
         case .transcribing:
             RecorderStateLabel(title: "Transcribing")
         case .inserted(let method):
@@ -184,6 +188,8 @@ private struct RecorderControlRail: View {
     @ViewBuilder
     private var trailingContent: some View {
         switch phase {
+        case .starting:
+            RecorderCancelAction(cancel: cancel)
         case .recording:
             RecorderActionStrip(hotkeyText: hotkeyText, stop: stop, cancel: cancel)
         case .transcribing:

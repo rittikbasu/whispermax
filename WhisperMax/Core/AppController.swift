@@ -18,6 +18,8 @@ enum InsertionMethod: String, Codable, Equatable {
 enum RecordingPhase: Equatable {
     case loadingModel
     case ready
+    case starting
+    case cancellingStart
     case recording
     case transcribing
     case inserted(InsertionMethod)
@@ -137,6 +139,7 @@ final class AppController {
     let permissionsManager = PermissionsManager()
     private let insertionService = TextInsertionService()
     private let recorder = AudioRecorderService()
+    private var recordingCallbackCoordinator = RecordingCallbackCoordinator()
     private let speechActivityService = SpeechActivityService()
     private let debugRecordingStore = DebugRecordingStore()
 
@@ -146,6 +149,7 @@ final class AppController {
     private var transcriptionTask: Task<Void, Never>?
     private var transcriptionShutdown: (id: UUID, task: Task<Void, Never>)?
     private var isStartingRecording = false
+    private var shouldCancelRecordingStart = false
     private var preRecordingSystemDefaultInputDeviceID: AudioObjectID?
     private var recordingPinnedDeviceID: AudioObjectID?
     private var permissionMonitorTask: Task<Void, Never>?
@@ -153,12 +157,14 @@ final class AppController {
     private var accessibilityNotificationObserver: NSObjectProtocol?
     private var menuFeedbackResetTask: Task<Void, Never>?
     private var pendingDeleteResetTask: Task<Void, Never>?
+    private var pendingPhaseResetTask: Task<Void, Never>?
     private var pendingInsertionTarget: InsertionTargetContext?
     private(set) var transcribingAnimationStartTime: TimeInterval?
 
 #if DEBUG
     var appleVoiceProcessingDiagnosticEnabled = false
     var speechGateBypassDiagnosticEnabled = false
+    var microphoneAccessRequestOverrideForTesting: (@MainActor () async -> Bool)?
     var appleVoiceProcessingDiagnosticStatus = "No voice-processing attempt yet." {
         didSet {
             UserDefaults.standard.set(appleVoiceProcessingDiagnosticStatus, forKey: "AppleVoiceProcessingDiagnosticStatus")
@@ -168,6 +174,10 @@ final class AppController {
 
     var phase: RecordingPhase = .loadingModel {
         didSet {
+            if phase != oldValue {
+                pendingPhaseResetTask?.cancel()
+                pendingPhaseResetTask = nil
+            }
             if phase == .transcribing, oldValue != .transcribing {
                 transcribingAnimationStartTime = Date.timeIntervalSinceReferenceDate
             } else if phase != .transcribing {
@@ -519,6 +529,10 @@ final class AppController {
         switch phase {
         case .loadingModel:
             return "Loading Model…"
+        case .starting:
+            return "Cancel Start"
+        case .cancellingStart:
+            return "Cancelling…"
         case .ready, .inserted, .error:
             return "Start Recording"
         case .recording:
@@ -530,7 +544,7 @@ final class AppController {
 
     var isMenuPrimaryActionEnabled: Bool {
         switch phase {
-        case .loadingModel, .transcribing:
+        case .loadingModel, .cancellingStart, .transcribing:
             return false
         default:
             return true
@@ -548,6 +562,14 @@ final class AppController {
     }
 
     var homeSubtitle: String {
+        if phase == .starting {
+            return "Starting microphone…"
+        }
+
+        if phase == .cancellingStart {
+            return "Cancelling recording start…"
+        }
+
         if !microphoneGranted {
             return "Grant microphone access to start dictation"
         }
@@ -561,6 +583,10 @@ final class AppController {
             return "Loading local model…"
         case .ready:
             return readySubtitle
+        case .starting:
+            return "Starting microphone…"
+        case .cancellingStart:
+            return "Cancelling recording start…"
         case .recording:
             return "Listening…"
         case .transcribing:
@@ -711,10 +737,12 @@ final class AppController {
 
     func toggleRecording() async {
         switch phase {
+        case .starting:
+            cancelRecording()
+        case .cancellingStart, .transcribing:
+            return
         case .recording:
             stopRecording()
-        case .transcribing:
-            return
         default:
             await startRecording()
         }
@@ -728,14 +756,34 @@ final class AppController {
             return
         }
 
-        guard phase != .recording, phase != .transcribing else { return }
+        guard phase != .starting,
+              phase != .cancellingStart,
+              phase != .recording,
+              phase != .transcribing else { return }
+
+        guard transcriptionEngine != nil else {
+            phase = .loadingModel
+            statusText = "The model is still loading."
+            startModelPreparation()
+            return
+        }
 
         isStartingRecording = true
-        defer { isStartingRecording = false }
+        shouldCancelRecordingStart = false
+        phase = .starting
+        statusText = "Starting…"
+        defer {
+            isStartingRecording = false
+            shouldCancelRecordingStart = false
+        }
 
-        breakIfModelUnavailable()
-
-        microphoneGranted = await permissionsManager.requestMicrophoneAccess()
+        microphoneGranted = await requestMicrophoneAccessForRecording()
+        do {
+            try checkRecordingStartCancellation()
+        } catch {
+            finishCancelledRecordingStart()
+            return
+        }
         guard microphoneGranted else {
             setRecorderIssue(.microphonePermissionRequired)
             return
@@ -747,17 +795,34 @@ final class AppController {
         let voiceProcessingEnabled = false
 #endif
 
+        var recordingID: UUID?
+        var recorderStarted = false
         do {
+            try checkRecordingStartCancellation()
             let switchedInputDevice = prepareInputDeviceForRecording()
             recordingDuration = 0
             lastTranscript = ""
             pendingInsertionTarget = insertionService.captureTargetContext()
             resetWaveform(active: true)
+            let nextRecordingID = UUID()
+            recordingID = nextRecordingID
+            guard recordingCallbackCoordinator.beginRecording(nextRecordingID) else {
+                throw AudioRecorderService.RecorderError.alreadyRecording
+            }
 
             try await startRecorderWithRecovery(
                 afterSwitchingInputDevice: switchedInputDevice,
-                voiceProcessingEnabled: voiceProcessingEnabled
+                voiceProcessingEnabled: voiceProcessingEnabled,
+                recordingID: nextRecordingID
             )
+            recorderStarted = true
+            try checkRecordingStartCancellation()
+            guard recordingCallbackCoordinator.acceptsMeter(for: nextRecordingID) else {
+                recorder.cancel()
+                recorderStarted = false
+                if phase.isErrorPhase { return }
+                throw AudioRecorderService.RecorderError.couldNotStartRecording
+            }
 #if DEBUG
             if voiceProcessingEnabled {
                 appleVoiceProcessingDiagnosticStatus = "Voice-processed capture started."
@@ -765,7 +830,12 @@ final class AppController {
 #endif
             statusText = "Listening…"
             phase = .recording
+        } catch is CancellationError {
+            if recorderStarted { recorder.cancel() }
+            if let recordingID { recordingCallbackCoordinator.abandonRecording(recordingID) }
+            finishCancelledRecordingStart()
         } catch {
+            if let recordingID { recordingCallbackCoordinator.abandonRecording(recordingID) }
             handleRecordingStartFailure()
 #if DEBUG
             if voiceProcessingEnabled {
@@ -785,10 +855,126 @@ final class AppController {
         let error = error as NSError
         return "recorder.start: \(error.domain) (\(error.code)): \(error.localizedDescription)"
     }
+
+    func runRecordingStartCancellationIntegrationCheck() async -> Bool {
+        guard ModelLocator.hasInstalledPhononModel else { return false }
+
+        if transcriptionEngine == nil {
+            phase = .loadingModel
+            startModelPreparation()
+            await modelPreparationTask?.value
+        }
+
+        guard transcriptionEngine != nil else { return false }
+
+        microphoneAccessRequestOverrideForTesting = {
+            try? await Task.sleep(for: .milliseconds(500))
+            return true
+        }
+        defer { microphoneAccessRequestOverrideForTesting = nil }
+
+        phase = .error(.generic("Earlier test state"))
+        transitionToReady(after: 0.02)
+        let startTask = Task { @MainActor in
+            await self.startRecording()
+        }
+        for _ in 0..<100 where phase != .starting {
+            await Task.yield()
+        }
+        guard phase == .starting else {
+            await startTask.value
+            return false
+        }
+
+        await toggleRecording()
+        try? await Task.sleep(for: .milliseconds(50))
+        let cancellationStateSurvivedOldReset = phase == .cancellingStart
+        await startTask.value
+        return cancellationStateSurvivedOldReset
+            && phase == .ready
+            && recordingCallbackCoordinator.activeRecordingID == nil
+    }
+
+    func runDelayedPhaseResetIntegrationCheck() async -> Bool {
+        let oldError = RecorderIssue.generic("Earlier test state")
+        let currentError = RecorderIssue.generic("Current test state")
+        phase = .error(oldError)
+        transitionToReady(after: 0.02)
+        phase = .error(currentError)
+        transitionToReady(after: 0.2)
+
+        try? await Task.sleep(for: .milliseconds(60))
+        let currentErrorWasPreserved = phase == .error(currentError)
+        try? await Task.sleep(for: .milliseconds(180))
+        return currentErrorWasPreserved && phase == .ready
+    }
+
+    func runPendingFinishCancellationIntegrationCheck() -> Bool {
+        let recordingID = UUID()
+        let fileURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("whispermax-cancelled-finish-\(recordingID.uuidString).caf")
+        do {
+            try Data([0x01]).write(to: fileURL)
+        } catch {
+            return false
+        }
+
+        guard recordingCallbackCoordinator.beginRecording(recordingID),
+              recordingCallbackCoordinator.stopRecording(recordingID) else {
+            try? FileManager.default.removeItem(at: fileURL)
+            return false
+        }
+
+        pendingInsertionTarget = nil
+        phase = .transcribing
+        cancelRecording()
+        handleRecordingFinished(
+            from: fileURL,
+            configuration: AudioCaptureConfiguration(
+                recordingID: recordingID,
+                voiceProcessingEnabled: false,
+                preferredMicrophoneMode: "standard",
+                activeMicrophoneMode: "standard",
+                sampleRate: 16_000,
+                channelCount: 1
+            )
+        )
+
+        return !FileManager.default.fileExists(atPath: fileURL.path)
+            && phase == (transcriptionEngine == nil ? .loadingModel : .ready)
+            && recordingCallbackCoordinator.activeRecordingID == nil
+    }
+
+    func runEarlyRecorderErrorIntegrationCheck() -> Bool {
+        let recordingID = UUID()
+        guard recordingCallbackCoordinator.beginRecording(recordingID) else { return false }
+
+        phase = .starting
+        let message = "Synthetic immediate recorder error"
+        handleRecordingError(recordingID: recordingID, message: message)
+        let errorWasHandled = phase == .error(.generic(message))
+            && recordingCallbackCoordinator.activeRecordingID == nil
+
+        phase = transcriptionEngine == nil ? .loadingModel : .ready
+        statusText = idleStatusText
+        return errorWasHandled
+    }
+
+    func runStaleTapBufferIntegrationCheck() -> Bool {
+        recorder.runStaleTapBufferIntegrationCheck()
+    }
 #endif
 
     func stopRecording() {
         guard phase == .recording else {
+            return
+        }
+
+        guard let recordingID = recordingCallbackCoordinator.activeRecordingID,
+              recordingCallbackCoordinator.stopRecording(recordingID) else {
+            recorder.cancel()
+            handleRecordingStartFailure()
+            setRecorderIssue(.recordingStartFailed("Recording could not be stopped. Try again."))
             return
         }
 
@@ -799,7 +985,16 @@ final class AppController {
 
     func cancelRecording() {
         switch phase {
+        case .starting:
+            shouldCancelRecordingStart = true
+            phase = .cancellingStart
+            statusText = "Cancelling…"
+        case .cancellingStart:
+            return
         case .recording:
+            if let recordingID = recordingCallbackCoordinator.activeRecordingID {
+                recordingCallbackCoordinator.abandonRecording(recordingID)
+            }
             recorder.cancel()
             restoreSystemInputAfterRecordingIfNeeded()
             pendingInsertionTarget = nil
@@ -808,7 +1003,12 @@ final class AppController {
             phase = transcriptionEngine == nil ? .loadingModel : .ready
             statusText = idleStatusText
         case .transcribing:
-            transcriptionTask?.cancel()
+            if let transcriptionTask {
+                transcriptionTask.cancel()
+            } else if let recordingID = recordingCallbackCoordinator.activeRecordingID,
+                      recordingCallbackCoordinator.cancelPendingFinish(recordingID) {
+                statusText = "Cancelling…"
+            }
         default:
             return
         }
@@ -947,22 +1147,62 @@ final class AppController {
     }
 
     private func configureRecorderCallbacks() {
-        recorder.onMeter = { [weak self] level, duration in
-            guard let self else { return }
+        recorder.onMeter = { [weak self] recordingID, level, duration in
+            guard let self,
+                  self.recordingCallbackCoordinator.acceptsMeter(for: recordingID) else { return }
             self.recordingDuration = duration
             self.pushWaveform(level: CGFloat(level))
         }
 
         recorder.onFinish = { [weak self] url, configuration in
             guard let self else { return }
-            self.transcriptionTask = Task { @MainActor [weak self] in
+            self.handleRecordingFinished(from: url, configuration: configuration)
+        }
+
+        recorder.onError = { [weak self] recordingID, message in
+            self?.handleRecordingError(recordingID: recordingID, message: message)
+        }
+    }
+
+    private func handleRecordingFinished(from url: URL, configuration: AudioCaptureConfiguration) {
+        guard let recordingID = configuration.recordingID else {
+            try? FileManager.default.removeItem(at: url)
+            return
+        }
+
+        switch recordingCallbackCoordinator.finishRecording(recordingID) {
+        case .stale:
+            try? FileManager.default.removeItem(at: url)
+        case .discard:
+            try? FileManager.default.removeItem(at: url)
+            finishCancelledPendingRecording()
+        case .transcribe:
+            transcriptionTask = Task { @MainActor [weak self] in
                 await self?.transcribeAndInsert(from: url, audioConfiguration: configuration)
             }
         }
+    }
 
-        recorder.onError = { [weak self] message in
-            self?.setError(message)
+    private func handleRecordingError(recordingID: UUID, message: String) {
+        switch recordingCallbackCoordinator.failRecording(recordingID) {
+        case .stale:
+            return
+        case .cancelled:
+            finishCancelledPendingRecording()
+        case .present:
+            pendingInsertionTarget = nil
+            restoreSystemInputAfterRecordingIfNeeded()
+            setError(message)
         }
+    }
+
+    private func finishCancelledPendingRecording() {
+        restoreSystemInputAfterRecordingIfNeeded()
+        pendingInsertionTarget = nil
+        recordingDuration = 0
+        resetWaveform(active: false)
+        phase = transcriptionEngine == nil ? .loadingModel : .ready
+        statusText = idleStatusText
     }
 
     private func configureInputDeviceObservation() {
@@ -1088,10 +1328,13 @@ final class AppController {
 
     private func startRecorderWithRecovery(
         afterSwitchingInputDevice switchedInputDevice: Bool,
-        voiceProcessingEnabled: Bool
+        voiceProcessingEnabled: Bool,
+        recordingID: UUID
     ) async throws {
+        try checkRecordingStartCancellation()
         if switchedInputDevice {
-            try? await Task.sleep(for: .milliseconds(220))
+            try await Task.sleep(for: .milliseconds(220))
+            try checkRecordingStartCancellation()
             refreshInputDevices()
         }
 
@@ -1099,8 +1342,12 @@ final class AppController {
         var lastError: Error?
 
         for attempt in 0..<3 {
+            try checkRecordingStartCancellation()
             do {
-                try recorder.start(voiceProcessingEnabled: voiceProcessingEnabled)
+                try recorder.start(
+                    voiceProcessingEnabled: voiceProcessingEnabled,
+                    recordingID: recordingID
+                )
                 return
             } catch let recorderError as AudioRecorderService.RecorderError {
                 lastError = recorderError
@@ -1115,8 +1362,11 @@ final class AppController {
                 }
 
                 refreshInputDevices()
-                try? await Task.sleep(for: .milliseconds(retryDelayMilliseconds))
+                try await Task.sleep(for: .milliseconds(retryDelayMilliseconds))
+                try checkRecordingStartCancellation()
                 retryDelayMilliseconds *= 2
+            } catch is CancellationError {
+                throw CancellationError()
             } catch {
                 lastError = error
                 NSLog("Recorder start attempt %d failed with unexpected error: %@", attempt + 1, error.localizedDescription)
@@ -1126,12 +1376,37 @@ final class AppController {
                 }
 
                 refreshInputDevices()
-                try? await Task.sleep(for: .milliseconds(retryDelayMilliseconds))
+                try await Task.sleep(for: .milliseconds(retryDelayMilliseconds))
+                try checkRecordingStartCancellation()
                 retryDelayMilliseconds *= 2
             }
         }
 
         throw lastError ?? AudioRecorderService.RecorderError.couldNotStartRecording
+    }
+
+    private func checkRecordingStartCancellation() throws {
+        try Task.checkCancellation()
+        if shouldCancelRecordingStart {
+            throw CancellationError()
+        }
+    }
+
+    private func finishCancelledRecordingStart() {
+        handleRecordingStartFailure()
+        recordingDuration = 0
+        resetWaveform(active: false)
+        phase = transcriptionEngine == nil ? .loadingModel : .ready
+        statusText = idleStatusText
+    }
+
+    private func requestMicrophoneAccessForRecording() async -> Bool {
+#if DEBUG
+        if let microphoneAccessRequestOverrideForTesting {
+            return await microphoneAccessRequestOverrideForTesting()
+        }
+#endif
+        return await permissionsManager.requestMicrophoneAccess()
     }
 
     private func restoreSystemInputAfterRecordingIfNeeded() {
@@ -1495,12 +1770,6 @@ final class AppController {
         }
     }
 
-    private func breakIfModelUnavailable() {
-        if transcriptionEngine == nil {
-            statusText = "The model is still loading."
-        }
-    }
-
     private func pushWaveform(level: CGFloat) {
         let clampedLevel = max(0, min(level, 1.0))
         let previous = waveformLevels.last ?? WaveformHistory.activeFloor
@@ -1542,15 +1811,29 @@ final class AppController {
     }
 
     private func transitionToReady(after delay: TimeInterval) {
-        DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
+        pendingPhaseResetTask?.cancel()
+        pendingPhaseResetTask = Task { @MainActor [weak self] in
+            do {
+                try await Task.sleep(for: .seconds(delay))
+            } catch {
+                return
+            }
+
             guard let self else { return }
-            guard self.phase != .recording, self.phase != .transcribing else { return }
+            guard self.phase != .starting,
+                  self.phase != .cancellingStart,
+                  self.phase != .recording,
+                  self.phase != .transcribing else {
+                return
+            }
+
             self.phase = self.transcriptionEngine == nil ? .loadingModel : .ready
             self.statusText = self.idleStatusText
             self.insertionTargetName = nil
             self.insertionTargetIcon = nil
             self.recordingDuration = 0
             self.resetWaveform(active: false)
+            self.pendingPhaseResetTask = nil
         }
     }
 
