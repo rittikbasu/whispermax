@@ -165,6 +165,10 @@ final class AppController {
     var appleVoiceProcessingDiagnosticEnabled = false
     var speechGateBypassDiagnosticEnabled = false
     var microphoneAccessRequestOverrideForTesting: (@MainActor () async -> Bool)?
+    var debugCapturedInsertionTargetBundleIdentifier: String? {
+        guard phase == .recording else { return nil }
+        return pendingInsertionTarget?.bundleIdentifier
+    }
     var appleVoiceProcessingDiagnosticStatus = "No voice-processing attempt yet." {
         didSet {
             UserDefaults.standard.set(appleVoiceProcessingDiagnosticStatus, forKey: "AppleVoiceProcessingDiagnosticStatus")
