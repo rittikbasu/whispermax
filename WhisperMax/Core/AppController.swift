@@ -1567,6 +1567,7 @@ final class AppController {
 
         do {
             let diagnostics = try await speechActivityService.analyzeSpeech(from: url)
+            try Task.checkCancellation()
             let debugChunkPlans: [DebugRecordingChunkPlan] = []
 
             guard diagnostics.mode != .bypass else {
