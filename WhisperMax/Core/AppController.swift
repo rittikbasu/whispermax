@@ -162,17 +162,10 @@ final class AppController {
     private(set) var transcribingAnimationStartTime: TimeInterval?
 
 #if DEBUG
-    var appleVoiceProcessingDiagnosticEnabled = false
-    var speechGateBypassDiagnosticEnabled = false
     var microphoneAccessRequestOverrideForTesting: (@MainActor () async -> Bool)?
     var debugCapturedInsertionTargetBundleIdentifier: String? {
         guard phase == .recording else { return nil }
         return pendingInsertionTarget?.bundleIdentifier
-    }
-    var appleVoiceProcessingDiagnosticStatus = "No voice-processing attempt yet." {
-        didSet {
-            UserDefaults.standard.set(appleVoiceProcessingDiagnosticStatus, forKey: "AppleVoiceProcessingDiagnosticStatus")
-        }
     }
 #endif
 
@@ -793,12 +786,6 @@ final class AppController {
             return
         }
 
-#if DEBUG
-        let voiceProcessingEnabled = appleVoiceProcessingDiagnosticEnabled
-#else
-        let voiceProcessingEnabled = false
-#endif
-
         var recordingID: UUID?
         var recorderStarted = false
         do {
@@ -816,7 +803,6 @@ final class AppController {
 
             try await startRecorderWithRecovery(
                 afterSwitchingInputDevice: switchedInputDevice,
-                voiceProcessingEnabled: voiceProcessingEnabled,
                 recordingID: nextRecordingID
             )
             recorderStarted = true
@@ -827,11 +813,6 @@ final class AppController {
                 if phase.isErrorPhase { return }
                 throw AudioRecorderService.RecorderError.couldNotStartRecording
             }
-#if DEBUG
-            if voiceProcessingEnabled {
-                appleVoiceProcessingDiagnosticStatus = "Voice-processed capture started."
-            }
-#endif
             statusText = "Listening…"
             phase = .recording
         } catch is CancellationError {
@@ -841,13 +822,6 @@ final class AppController {
         } catch {
             if let recordingID { recordingCallbackCoordinator.abandonRecording(recordingID) }
             handleRecordingStartFailure()
-#if DEBUG
-            if voiceProcessingEnabled {
-                appleVoiceProcessingDiagnosticStatus = (error as? AudioRecorderService.RecorderError)?.logDescription
-                    ?? Self.diagnosticDescription(for: error)
-                appleVoiceProcessingDiagnosticEnabled = false
-            }
-#endif
             let message = (error as? AudioRecorderService.RecorderError)?.errorDescription
                 ?? "Failed to start recording."
             setRecorderIssue(.recordingStartFailed(message))
@@ -855,11 +829,6 @@ final class AppController {
     }
 
 #if DEBUG
-    private static func diagnosticDescription(for error: Error) -> String {
-        let error = error as NSError
-        return "recorder.start: \(error.domain) (\(error.code)): \(error.localizedDescription)"
-    }
-
     func runRecordingStartCancellationIntegrationCheck() async -> Bool {
         guard ModelLocator.hasInstalledPhononModel else { return false }
 
@@ -936,9 +905,6 @@ final class AppController {
             from: fileURL,
             configuration: AudioCaptureConfiguration(
                 recordingID: recordingID,
-                voiceProcessingEnabled: false,
-                preferredMicrophoneMode: "standard",
-                activeMicrophoneMode: "standard",
                 sampleRate: 16_000,
                 channelCount: 1
             )
@@ -1169,11 +1135,7 @@ final class AppController {
     }
 
     private func handleRecordingFinished(from url: URL, configuration: AudioCaptureConfiguration) {
-        guard let recordingID = configuration.recordingID else {
-            try? FileManager.default.removeItem(at: url)
-            return
-        }
-
+        let recordingID = configuration.recordingID
         switch recordingCallbackCoordinator.finishRecording(recordingID) {
         case .stale:
             try? FileManager.default.removeItem(at: url)
@@ -1332,7 +1294,6 @@ final class AppController {
 
     private func startRecorderWithRecovery(
         afterSwitchingInputDevice switchedInputDevice: Bool,
-        voiceProcessingEnabled: Bool,
         recordingID: UUID
     ) async throws {
         try checkRecordingStartCancellation()
@@ -1348,10 +1309,7 @@ final class AppController {
         for attempt in 0..<3 {
             try checkRecordingStartCancellation()
             do {
-                try recorder.start(
-                    voiceProcessingEnabled: voiceProcessingEnabled,
-                    recordingID: recordingID
-                )
+                try recorder.start(recordingID: recordingID)
                 return
             } catch let recorderError as AudioRecorderService.RecorderError {
                 lastError = recorderError
@@ -1361,7 +1319,7 @@ final class AppController {
                     throw recorderError
                 }
 
-                guard !voiceProcessingEnabled, attempt < 2 else {
+                guard attempt < 2 else {
                     throw recorderError
                 }
 
@@ -1375,7 +1333,7 @@ final class AppController {
                 lastError = error
                 NSLog("Recorder start attempt %d failed with unexpected error: %@", attempt + 1, error.localizedDescription)
 
-                guard !voiceProcessingEnabled, attempt < 2 else {
+                guard attempt < 2 else {
                     throw error
                 }
 
@@ -1608,33 +1566,10 @@ final class AppController {
         }
 
         do {
-#if DEBUG
-            let diagnoseVoiceProcessing = appleVoiceProcessingDiagnosticEnabled
-            let bypassSpeechGate = speechGateBypassDiagnosticEnabled
-#else
-            let diagnoseVoiceProcessing = false
-            let bypassSpeechGate = false
-#endif
             let diagnostics = try await speechActivityService.analyzeSpeech(from: url)
             let debugChunkPlans: [DebugRecordingChunkPlan] = []
 
-#if DEBUG
-            if diagnoseVoiceProcessing || bypassSpeechGate {
-                let peakProbability = diagnostics.speechRegions.map(\.maxProbability).max() ?? 0
-                appleVoiceProcessingDiagnosticStatus = String(
-                    format: "Capture voice processing %@ · %.0f Hz / %u ch · VAD %@, %d regions, max %.2f · gate %@.",
-                    audioConfiguration.voiceProcessingEnabled ? "active" : "inactive",
-                    audioConfiguration.sampleRate,
-                    audioConfiguration.channelCount,
-                    diagnostics.mode.rawValue,
-                    diagnostics.speechRegions.count,
-                    peakProbability,
-                    bypassSpeechGate ? "bypassed" : "enforced"
-                )
-            }
-#endif
-
-            guard diagnostics.mode != .bypass || bypassSpeechGate else {
+            guard diagnostics.mode != .bypass else {
                 let issue = RecorderIssue.speechDetectionUnavailable
                 captureDebugRecording(
                     from: url,
@@ -1655,7 +1590,7 @@ final class AppController {
             let hasDetectedSpeech = diagnostics.speechRegions.contains(where: {
                 $0.maxProbability >= SpeechGate.minimumPeakProbability
             })
-            guard hasDetectedSpeech || bypassSpeechGate else {
+            guard hasDetectedSpeech else {
                 captureDebugRecording(
                     from: url,
                     audioConfiguration: audioConfiguration,
@@ -1680,11 +1615,6 @@ final class AppController {
                 preferredTerms: preferredTranscriptionTerms
             )
             guard !cleanedTranscript.isEmpty else {
-#if DEBUG
-                if bypassSpeechGate {
-                    appleVoiceProcessingDiagnosticStatus = "VAD gate bypassed; Phonon returned no text."
-                }
-#endif
                 captureDebugRecording(
                     from: url,
                     audioConfiguration: audioConfiguration,
