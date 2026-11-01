@@ -269,7 +269,11 @@ private struct DownloadCard: View {
                 HStack {
                     Text(downloadStatusText)
                         .font(.system(size: 12, weight: .medium))
-                        .foregroundStyle(controller.downloadError != nil ? Color(red: 0.95, green: 0.40, blue: 0.40) : OnboardingTheme.mutedText)
+                        .foregroundStyle(
+                            controller.downloadError != nil || controller.modelPreparationError != nil
+                                ? Color(red: 0.95, green: 0.40, blue: 0.40)
+                                : OnboardingTheme.mutedText
+                        )
 
                     Spacer()
 
@@ -312,20 +316,21 @@ private struct DownloadCard: View {
 
     private var downloadStatusText: String {
         if controller.downloadError != nil { return "Download failed" }
-        if controller.isDownloadComplete {
-            return controller.modelSource == .superwhisper
-                ? "Model found on your Mac"
-                : "Speech model ready"
-        }
+        if controller.modelPreparationError != nil { return "Speech model setup failed" }
+        if controller.isModelPrepared { return "Speech model ready" }
+        if controller.isDownloadComplete { return "Preparing speech model on this Mac\u{2026}" }
         return "Downloading speech model\u{2026}"
     }
 
     private var downloadSizeText: String {
-        let downloaded = controller.downloadProgress * 1624
-        if controller.isDownloadComplete {
-            return "1.6 GB"
-        }
-        return String(format: "%.0f MB / 1.6 GB", downloaded)
+        let total = PhononModelPackage.totalByteCount
+        let downloaded = Int64(controller.downloadProgress * Double(total))
+        let formatter = ByteCountFormatter()
+        formatter.allowedUnits = [.useMB, .useGB]
+        formatter.countStyle = .file
+        return controller.isDownloadComplete
+            ? formatter.string(fromByteCount: total)
+            : "\(formatter.string(fromByteCount: downloaded)) / \(formatter.string(fromByteCount: total))"
     }
 }
 
@@ -537,42 +542,15 @@ private struct ReadyCard: View {
         VStack(spacing: 0) {
             Spacer()
 
-            VStack(spacing: 28) {
-                KeycapGroup(isPressed: keycapPressed)
-                    .opacity(keycapVisible ? 1 : 0)
-                    .scaleEffect(keycapVisible ? 1 : 0.90)
-
-                VStack(spacing: 10) {
-                    HStack(spacing: 6) {
-                        Text("Press")
-                            .foregroundStyle(OnboardingTheme.headlineText)
-                        Text("\u{2325} Space")
-                            .foregroundStyle(.white)
-                    }
-                    .font(.system(size: 26, weight: .semibold))
-                    .tracking(-0.5)
-
-                    Text("to start dictating. Press it again to stop and transcribe.")
-                        .font(.system(size: 15, weight: .regular))
-                        .foregroundStyle(OnboardingTheme.bodyText)
-                        .multilineTextAlignment(.center)
-                }
-                .opacity(instructionVisible ? 1 : 0)
-                .offset(y: instructionVisible ? 0 : 10)
-
-                Text("whispermax lives in your menu bar")
-                    .font(.system(size: 12.5, weight: .medium))
-                    .foregroundStyle(.white.opacity(0.30))
-                    .opacity(instructionVisible ? 1 : 0)
-            }
+            readyContent
 
             Spacer()
 
             OnboardingButton(
-                title: "Get Started",
+                title: readyButtonTitle,
                 isPrimary: true,
-                isEnabled: true,
-                action: controller.completeOnboarding
+                isEnabled: controller.isModelPrepared || controller.modelPreparationError != nil,
+                action: readyButtonAction
             )
             .opacity(buttonVisible ? 1 : 0)
             .offset(y: buttonVisible ? 0 : 8)
@@ -613,6 +591,88 @@ private struct ReadyCard: View {
                 try? await Task.sleep(for: .seconds(2.2))
             }
         }
+    }
+
+    @ViewBuilder
+    private var readyContent: some View {
+        if controller.isModelPrepared {
+            VStack(spacing: 28) {
+                KeycapGroup(isPressed: keycapPressed)
+                    .opacity(keycapVisible ? 1 : 0)
+                    .scaleEffect(keycapVisible ? 1 : 0.90)
+
+                VStack(spacing: 10) {
+                    HStack(spacing: 6) {
+                        Text("Press")
+                            .foregroundStyle(OnboardingTheme.headlineText)
+                        Text("\u{2325} Space")
+                            .foregroundStyle(.white)
+                    }
+                    .font(.system(size: 26, weight: .semibold))
+                    .tracking(-0.5)
+
+                    Text("to start dictating. Press it again to stop and transcribe.")
+                        .font(.system(size: 15, weight: .regular))
+                        .foregroundStyle(OnboardingTheme.bodyText)
+                        .multilineTextAlignment(.center)
+                }
+                .opacity(instructionVisible ? 1 : 0)
+                .offset(y: instructionVisible ? 0 : 10)
+
+                Text("whispermax lives in your menu bar")
+                    .font(.system(size: 12.5, weight: .medium))
+                    .foregroundStyle(.white.opacity(0.30))
+                    .opacity(instructionVisible ? 1 : 0)
+            }
+            .transition(.opacity)
+        } else if let error = controller.modelPreparationError {
+            VStack(spacing: 14) {
+                Image(systemName: "exclamationmark.triangle")
+                    .font(.system(size: 32, weight: .regular))
+                    .foregroundStyle(OnboardingTheme.pendingAmber)
+
+                Text("Couldn’t prepare the speech model")
+                    .font(.system(size: 20, weight: .semibold))
+                    .foregroundStyle(OnboardingTheme.headlineText)
+
+                Text(error)
+                    .font(.system(size: 13, weight: .regular))
+                    .foregroundStyle(OnboardingTheme.bodyText)
+                    .multilineTextAlignment(.center)
+                    .lineLimit(3)
+                    .frame(maxWidth: 380)
+            }
+            .transition(.opacity)
+        } else {
+            VStack(spacing: 16) {
+                ProgressView()
+                    .controlSize(.large)
+                    .tint(OnboardingTheme.progressFill)
+
+                Text("Preparing Phonon on this Mac")
+                    .font(.system(size: 20, weight: .semibold))
+                    .foregroundStyle(OnboardingTheme.headlineText)
+
+                Text("First-time setup can take a few minutes. WhisperMax will be ready when preparation finishes.")
+                    .font(.system(size: 14, weight: .regular))
+                    .foregroundStyle(OnboardingTheme.bodyText)
+                    .multilineTextAlignment(.center)
+                    .frame(maxWidth: 380)
+            }
+            .transition(.opacity)
+        }
+    }
+
+    private var readyButtonTitle: String {
+        if controller.modelPreparationError != nil { return "Try Again" }
+        return controller.isModelPrepared ? "Get Started" : "Preparing\u{2026}"
+    }
+
+    private var readyButtonAction: () -> Void {
+        if controller.modelPreparationError != nil {
+            return controller.retryModelPreparation
+        }
+        return controller.completeOnboarding
     }
 }
 

@@ -16,26 +16,30 @@ enum ModelLocator {
     static let audioInputPreferenceFileURL = appSupportDirectory.appendingPathComponent("audio-input-preference.json")
     static let insertionPolicyFileURL = appSupportDirectory.appendingPathComponent("insertion-policy.json")
     static let onboardingCompleteFileURL = appSupportDirectory.appendingPathComponent("onboarding-complete")
-    static let downloadResumeDataURL = appSupportDirectory.appendingPathComponent("model-download.resumedata")
     static let debugRecordingsDirectory = appSupportDirectory.appendingPathComponent("DebugRecordings", isDirectory: true)
     static let modelsDirectory = appSupportDirectory.appendingPathComponent("Models", isDirectory: true)
     static let legacyTemporaryRecordingsDirectory = appSupportDirectory.appendingPathComponent("Recordings", isDirectory: true)
     static let temporaryRecordingsDirectory = cacheDirectory.appendingPathComponent("Recordings", isDirectory: true)
-    static let appLocalModelURL = modelsDirectory.appendingPathComponent("ggml-large-v3-turbo.bin")
-
-    static let superwhisperModelURL: URL = {
-        FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent("Library", isDirectory: true)
-            .appendingPathComponent("Application Support", isDirectory: true)
-            .appendingPathComponent("superwhisper", isDirectory: true)
-            .appendingPathComponent("ggml-large-v3-turbo.bin")
-    }()
+    static let phononModelURL = modelsDirectory.appendingPathComponent("Phonon-2-CoreML", isDirectory: true)
+    static let phononPreviousModelURL = modelsDirectory.appendingPathComponent(".Phonon-2-CoreML.previous", isDirectory: true)
+    static let phononStagingModelURL = modelsDirectory.appendingPathComponent(".Phonon-2-CoreML.partial", isDirectory: true)
+    static let phononDownloadResumeDataURL = appSupportDirectory.appendingPathComponent("phonon-model-download.resumedata")
+    static let phononDownloadResumeAssetURL = appSupportDirectory.appendingPathComponent("phonon-model-download.asset")
 
     static func prepareDirectories() throws {
         try FileManager.default.createDirectory(at: appSupportDirectory, withIntermediateDirectories: true)
         try FileManager.default.createDirectory(at: modelsDirectory, withIntermediateDirectories: true)
         try FileManager.default.createDirectory(at: cacheDirectory, withIntermediateDirectories: true)
         try FileManager.default.createDirectory(at: temporaryRecordingsDirectory, withIntermediateDirectories: true)
+
+        if !FileManager.default.fileExists(atPath: phononModelURL.path),
+           FileManager.default.fileExists(atPath: phononPreviousModelURL.path) {
+            do {
+                try FileManager.default.moveItem(at: phononPreviousModelURL, to: phononModelURL)
+            } catch {
+                NSLog("WhisperMax could not restore its previous Phonon model: %@", error.localizedDescription)
+            }
+        }
     }
 
     static func cleanTemporaryRecordings() {
@@ -62,16 +66,8 @@ enum ModelLocator {
         }
     }
 
-    static func preferredModelURL() -> URL? {
-        if FileManager.default.fileExists(atPath: appLocalModelURL.path) {
-            return appLocalModelURL
-        }
-
-        if FileManager.default.fileExists(atPath: superwhisperModelURL.path) {
-            return superwhisperModelURL
-        }
-
-        return nil
+    static var hasInstalledPhononModel: Bool {
+        PhononModelPackage.isInstalled(at: phononModelURL)
     }
 
     static func bundledVADModelURL(in bundle: Bundle = .main) -> URL? {

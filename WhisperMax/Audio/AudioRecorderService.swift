@@ -1,10 +1,17 @@
 import AVFoundation
 import Foundation
 
+struct AudioCaptureConfiguration: Codable, Sendable {
+    let recordingID: UUID
+    let sampleRate: Double
+    let channelCount: UInt32
+}
+
 final class AudioRecorderService {
     enum RecorderError: LocalizedError {
         case inputUnavailable(sampleRate: Double, channelCount: AVAudioChannelCount)
         case engineStartFailed(String)
+        case alreadyRecording
         case couldNotStartRecording
 
         var errorDescription: String? {
@@ -13,6 +20,8 @@ final class AudioRecorderService {
                 return "Audio input is still switching. Try again in a moment."
             case .engineStartFailed:
                 return "Audio input could not start. Try again in a moment."
+            case .alreadyRecording:
+                return "A recording is already in progress."
             case .couldNotStartRecording:
                 return "Could not start recording."
             }
@@ -24,6 +33,8 @@ final class AudioRecorderService {
                 return "input unavailable (sampleRate=\(sampleRate), channelCount=\(channelCount))"
             case .engineStartFailed(let message):
                 return "engine start failed (\(message))"
+            case .alreadyRecording:
+                return "recording already in progress"
             case .couldNotStartRecording:
                 return "could not start recording"
             }
@@ -35,7 +46,11 @@ final class AudioRecorderService {
     private var engine: AVAudioEngine?
     private var recordingFile: AVAudioFile?
     private var recordingURL: URL?
+    private var recordingID: UUID?
+    private var inputTapID: UUID?
+    private var captureConfiguration: AudioCaptureConfiguration?
     private var shouldDiscardCurrentRecording = false
+    private var isStarting = false
     private var isRecording = false
     private var recordedDuration: TimeInterval = 0
     private var lastMeterEmissionTime: TimeInterval = 0
@@ -43,11 +58,25 @@ final class AudioRecorderService {
     private var displayedLevel: Float = 0
     private var recentRMSDB: [Float] = []
 
-    var onMeter: (@MainActor @Sendable (Float, TimeInterval) -> Void)?
-    var onFinish: (@MainActor @Sendable (URL) -> Void)?
-    var onError: (@MainActor @Sendable (String) -> Void)?
+    var onMeter: (@MainActor @Sendable (UUID, Float, TimeInterval) -> Void)?
+    var onFinish: (@MainActor @Sendable (URL, AudioCaptureConfiguration) -> Void)?
+    var onError: (@MainActor @Sendable (UUID, String) -> Void)?
 
-    func start() throws {
+    func start(recordingID: UUID) throws {
+        stateLock.lock()
+        guard !isStarting, !isRecording else {
+            stateLock.unlock()
+            throw RecorderError.alreadyRecording
+        }
+        isStarting = true
+        stateLock.unlock()
+
+        defer {
+            stateLock.lock()
+            isStarting = false
+            stateLock.unlock()
+        }
+
         try ModelLocator.prepareDirectories()
 
         let url = ModelLocator.temporaryRecordingsDirectory
@@ -56,18 +85,21 @@ final class AudioRecorderService {
 
         let engine = AVAudioEngine()
         let inputNode = engine.inputNode
-        let hardwareFormat = inputNode.outputFormat(forBus: 0)
 
-        guard
-            hardwareFormat.channelCount > 0,
-            hardwareFormat.sampleRate > 0,
-            let inputFormat = AVAudioFormat(
-                commonFormat: .pcmFormatFloat32,
+        let hardwareFormat = inputNode.outputFormat(forBus: 0)
+        guard hardwareFormat.channelCount > 0, hardwareFormat.sampleRate > 0 else {
+            throw RecorderError.inputUnavailable(
                 sampleRate: hardwareFormat.sampleRate,
-                channels: hardwareFormat.channelCount,
-                interleaved: false
+                channelCount: hardwareFormat.channelCount
             )
-        else {
+        }
+
+        guard let inputFormat = AVAudioFormat(
+            commonFormat: .pcmFormatFloat32,
+            sampleRate: hardwareFormat.sampleRate,
+            channels: hardwareFormat.channelCount,
+            interleaved: false
+        ) else {
             throw RecorderError.inputUnavailable(
                 sampleRate: hardwareFormat.sampleRate,
                 channelCount: hardwareFormat.channelCount
@@ -80,6 +112,7 @@ final class AudioRecorderService {
             commonFormat: inputFormat.commonFormat,
             interleaved: inputFormat.isInterleaved
         )
+        let inputTapID = UUID()
 
         stateLock.lock()
         shouldDiscardCurrentRecording = false
@@ -92,6 +125,8 @@ final class AudioRecorderService {
         self.engine = engine
         self.recordingFile = recordingFile
         self.recordingURL = url
+        self.recordingID = recordingID
+        self.inputTapID = inputTapID
         stateLock.unlock()
 
         inputNode.removeTap(onBus: 0)
@@ -100,23 +135,37 @@ final class AudioRecorderService {
             bufferSize: 1_024,
             format: inputFormat
         ) { [weak self] buffer, _ in
-            self?.handleInputBuffer(buffer)
+            self?.handleInputBuffer(buffer, recordingID: recordingID, tapID: inputTapID)
         }
 
+        let outputFormat = engine.outputNode.inputFormat(forBus: 0)
         do {
             engine.prepare()
             try engine.start()
         } catch {
+            let detail = "\(Self.diagnosticDescription(for: error)); input \(Self.formatDescription(hardwareFormat)), output \(Self.formatDescription(outputFormat))"
             inputNode.removeTap(onBus: 0)
+            engine.stop()
             try? FileManager.default.removeItem(at: url)
             stateLock.lock()
             self.engine = nil
             self.recordingFile = nil
             self.recordingURL = nil
+            self.recordingID = nil
+            self.inputTapID = nil
+            self.captureConfiguration = nil
             self.isRecording = false
             stateLock.unlock()
-            throw RecorderError.engineStartFailed(error.localizedDescription)
+            throw RecorderError.engineStartFailed(detail)
         }
+
+        stateLock.lock()
+        captureConfiguration = AudioCaptureConfiguration(
+            recordingID: recordingID,
+            sampleRate: hardwareFormat.sampleRate,
+            channelCount: hardwareFormat.channelCount
+        )
+        stateLock.unlock()
     }
 
     func stop() {
@@ -129,6 +178,8 @@ final class AudioRecorderService {
 
     private func finishRecording(discard: Bool) {
         let engine: AVAudioEngine?
+        let recordingID: UUID?
+        let captureConfiguration: AudioCaptureConfiguration?
 
         stateLock.lock()
         guard isRecording else {
@@ -138,6 +189,8 @@ final class AudioRecorderService {
 
         shouldDiscardCurrentRecording = discard
         engine = self.engine
+        recordingID = self.recordingID
+        captureConfiguration = self.captureConfiguration
         stateLock.unlock()
 
         engine?.inputNode.removeTap(onBus: 0)
@@ -152,6 +205,9 @@ final class AudioRecorderService {
         self.engine = nil
         self.recordingFile = nil
         self.recordingURL = nil
+        self.recordingID = nil
+        self.inputTapID = nil
+        self.captureConfiguration = nil
         self.shouldDiscardCurrentRecording = false
         self.isRecording = false
         self.recordedDuration = 0
@@ -161,7 +217,15 @@ final class AudioRecorderService {
         self.recentRMSDB.removeAll(keepingCapacity: true)
         stateLock.unlock()
 
+        guard let recordingID else {
+            if let url { try? FileManager.default.removeItem(at: url) }
+            return
+        }
+
         guard let url else {
+            Task { @MainActor [onError] in
+                onError?(recordingID, "Recording file could not be saved. Please try again.")
+            }
             return
         }
 
@@ -170,28 +234,57 @@ final class AudioRecorderService {
             return
         }
 
+        guard let captureConfiguration else {
+            try? FileManager.default.removeItem(at: url)
+            Task { @MainActor [onError] in
+                onError?(recordingID, "Recording details could not be saved. Please try again.")
+            }
+            return
+        }
+
         Task { @MainActor [onFinish] in
-            onFinish?(url)
+            onFinish?(url, captureConfiguration)
         }
     }
 
-    private func handleInputBuffer(_ buffer: AVAudioPCMBuffer) {
+    private static func diagnosticDescription(for error: Error) -> String {
+        let error = error as NSError
+        return "\(error.domain) (\(error.code)): \(error.localizedDescription)"
+    }
+
+    private static func formatDescription(_ format: AVAudioFormat) -> String {
+        "\(format.sampleRate) Hz / \(format.channelCount) ch"
+    }
+
+    private func handleInputBuffer(
+        _ buffer: AVAudioPCMBuffer,
+        recordingID expectedRecordingID: UUID,
+        tapID expectedTapID: UUID
+    ) {
         let metrics = Self.signalMetrics(from: buffer)
         let duration: TimeInterval
         let shouldEmitMeter: Bool
         let emittedLevel: Float
 
         stateLock.lock()
-        guard let recordingFile else {
+        guard self.recordingID == expectedRecordingID,
+              self.inputTapID == expectedTapID,
+              let recordingFile
+        else {
             stateLock.unlock()
             return
         }
+        let recordingID = expectedRecordingID
 
         do {
             try recordingFile.write(from: buffer)
         } catch {
             stateLock.unlock()
-            failRecording(message: "Recording failed.")
+            failRecording(
+                message: "Recording failed.",
+                recordingID: recordingID,
+                tapID: expectedTapID
+            )
             return
         }
 
@@ -214,29 +307,119 @@ final class AudioRecorderService {
 
         let onMeter = self.onMeter
         Task { @MainActor in
-            onMeter?(emittedLevel, duration)
+            onMeter?(expectedRecordingID, emittedLevel, duration)
         }
     }
 
-    private func failRecording(message: String) {
+#if DEBUG
+    func runStaleTapBufferIntegrationCheck() -> Bool {
+        guard let format = AVAudioFormat(
+            commonFormat: .pcmFormatFloat32,
+            sampleRate: 16_000,
+            channels: 1,
+            interleaved: false
+        ), let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: 512) else {
+            return false
+        }
+        buffer.frameLength = 512
+        if let samples = buffer.floatChannelData?.pointee {
+            for index in 0..<Int(buffer.frameLength) {
+                samples[index] = 0.1
+            }
+        } else {
+            return false
+        }
+
+        let activeRecordingID = UUID()
+        let staleSessionID = UUID()
+        let activeTapID = UUID()
+        let staleTapID = UUID()
+        let fileURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("whispermax-stale-tap-\(activeRecordingID.uuidString).caf")
+        let file: AVAudioFile
+        do {
+            file = try AVAudioFile(
+                forWriting: fileURL,
+                settings: format.settings,
+                commonFormat: format.commonFormat,
+                interleaved: format.isInterleaved
+            )
+        } catch {
+            return false
+        }
+        defer {
+            stateLock.lock()
+            recordingFile = nil
+            recordingURL = nil
+            recordingID = nil
+            inputTapID = nil
+            isRecording = false
+            recordedDuration = 0
+            stateLock.unlock()
+            try? FileManager.default.removeItem(at: fileURL)
+        }
+
+        stateLock.lock()
+        guard !isStarting, !isRecording, recordingFile == nil else {
+            stateLock.unlock()
+            return false
+        }
+        recordingFile = file
+        recordingURL = fileURL
+        recordingID = activeRecordingID
+        inputTapID = activeTapID
+        isRecording = true
+        stateLock.unlock()
+
+        handleInputBuffer(buffer, recordingID: staleSessionID, tapID: activeTapID)
+        handleInputBuffer(buffer, recordingID: activeRecordingID, tapID: staleTapID)
+        failRecording(
+            message: "Stale attempt error",
+            recordingID: activeRecordingID,
+            tapID: staleTapID
+        )
+
+        stateLock.lock()
+        let staleCallbacksWereRejected = recordingID == activeRecordingID
+            && inputTapID == activeTapID
+            && recordingFile === file
+            && recordingURL == fileURL
+            && isRecording
+            && recordedDuration == 0
+            && file.length == 0
+        stateLock.unlock()
+        return staleCallbacksWereRejected
+    }
+#endif
+
+    private func failRecording(
+        message: String,
+        recordingID expectedRecordingID: UUID,
+        tapID expectedTapID: UUID
+    ) {
         let engine: AVAudioEngine?
         let recordingURL: URL?
+        let recordingID: UUID?
         let onError = self.onError
 
         stateLock.lock()
-        guard isRecording else {
+        guard isRecording,
+              self.recordingID == expectedRecordingID,
+              self.inputTapID == expectedTapID
+        else {
             stateLock.unlock()
-            Task { @MainActor in
-                onError?(message)
-            }
             return
         }
 
         engine = self.engine
         recordingURL = self.recordingURL
+        recordingID = self.recordingID
         self.engine = nil
         self.recordingFile = nil
         self.recordingURL = nil
+        self.recordingID = nil
+        self.inputTapID = nil
+        self.captureConfiguration = nil
         self.shouldDiscardCurrentRecording = false
         self.isRecording = false
         self.recordedDuration = 0
@@ -253,8 +436,10 @@ final class AudioRecorderService {
             try? FileManager.default.removeItem(at: recordingURL)
         }
 
-        Task { @MainActor in
-            onError?(message)
+        if let recordingID {
+            Task { @MainActor in
+                onError?(recordingID, message)
+            }
         }
     }
 

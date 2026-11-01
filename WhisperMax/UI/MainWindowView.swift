@@ -254,8 +254,15 @@ private struct MainContentArea: View {
         @ViewBuilder content: () -> Content
     ) -> some View {
         VStack(alignment: .leading, spacing: 0) {
-            VStack(alignment: .leading, spacing: controller.needsSetup ? 26 : 0) {
+            VStack(alignment: .leading, spacing: controller.needsSetup || controller.modelPreparationError != nil ? 26 : 0) {
                 WindowHeader()
+
+                if let modelPreparationError = controller.modelPreparationError {
+                    ModelPreparationFailurePanel(
+                        message: modelPreparationError,
+                        retryAction: controller.retryModelPreparation
+                    )
+                }
 
                 if controller.needsSetup {
                     PermissionSetupPanel()
@@ -352,7 +359,7 @@ private struct WindowHeader: View {
         case .home:
             return controller.homeSubtitle
         case .dictionary:
-            return "Add the product names, phrases, and uncommon terms you want whispermax to hear correctly."
+            return "Add names and uncommon terms; recognized words keep your preferred capitalization."
         case .settings:
             return "Your hotkey, model, and permissions."
         }
@@ -399,6 +406,38 @@ private struct UpdateAvailablePill: View {
         }
         .animation(.easeOut(duration: 0.14), value: isHovering)
         .help("Open update details")
+    }
+}
+
+private struct ModelPreparationFailurePanel: View {
+    let message: String
+    let retryAction: () -> Void
+
+    var body: some View {
+        HStack(spacing: 14) {
+            Image(systemName: "exclamationmark.triangle.fill")
+                .font(.system(size: 14, weight: .semibold))
+                .foregroundStyle(Color(red: 0.91, green: 0.67, blue: 0.27))
+
+            VStack(alignment: .leading, spacing: 4) {
+                Text("Speech model couldn’t load")
+                    .font(.system(size: 14, weight: .semibold))
+                    .foregroundStyle(.white.opacity(0.92))
+
+                Text(message)
+                    .font(.system(size: 12, weight: .regular))
+                    .foregroundStyle(.white.opacity(0.45))
+                    .lineLimit(2)
+            }
+
+            Spacer(minLength: 8)
+
+            Button("Try Again", action: retryAction)
+                .buttonStyle(PanelButtonStyle(prominent: true))
+        }
+        .padding(.horizontal, 20)
+        .padding(.vertical, 18)
+        .background(PanelCardBackground(cornerRadius: 16))
     }
 }
 
@@ -1215,7 +1254,7 @@ private struct DictionaryEmptyHero: View {
                     .foregroundStyle(.white.opacity(0.90))
                     .multilineTextAlignment(.center)
 
-                Text("whispermax will use them as spelling hints during local transcription.")
+                Text("When Phonon recognizes a term, whispermax keeps the capitalization you entered.")
                     .font(.system(size: 13.5, weight: .regular))
                     .foregroundStyle(.white.opacity(0.42))
                     .multilineTextAlignment(.center)

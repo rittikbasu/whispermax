@@ -25,11 +25,6 @@ struct DebugRecordingTranscriptionPass: Codable, Sendable {
     let accepted: Bool
     let transcript: String
     let selectedDuration: TimeInterval?
-    let averageNoSpeechProbability: Float
-    let maxNoSpeechProbability: Float
-    let averageTokenProbability: Float
-    let segmentCount: Int
-    let segmentDiagnostics: [TranscriptionSegmentDiagnostic]
 }
 
 struct DebugRecordingSpeechRegion: Codable, Sendable {
@@ -61,6 +56,7 @@ struct DebugRecordingMetadata: Codable, Sendable {
     let issueMessage: String?
     let errorMessage: String?
     let audioFilename: String
+    let audioConfiguration: AudioCaptureConfiguration?
     let diagnostics: DebugRecordingDiagnostics?
     let chunks: [DebugRecordingChunkPlan]
     let transcriptionPasses: [DebugRecordingTranscriptionPass]
@@ -101,6 +97,7 @@ final class DebugRecordingStore {
         insertionMethod: InsertionMethod? = nil,
         issueMessage: String? = nil,
         errorMessage: String? = nil,
+        audioConfiguration: AudioCaptureConfiguration? = nil,
         diagnostics: SpeechActivityDiagnostics? = nil,
         chunks: [DebugRecordingChunkPlan] = [],
         transcriptionPasses: [DebugRecordingTranscriptionPass] = []
@@ -138,6 +135,7 @@ final class DebugRecordingStore {
                 issueMessage: issueMessage,
                 errorMessage: errorMessage,
                 audioFilename: audioFilename,
+                audioConfiguration: audioConfiguration,
                 diagnostics: diagnostics.map(Self.makeDiagnostics),
                 chunks: chunks,
                 transcriptionPasses: transcriptionPasses
@@ -236,11 +234,6 @@ struct DebugRecordingTranscriptionPass: Sendable {
     let accepted: Bool
     let transcript: String
     let selectedDuration: TimeInterval?
-    let averageNoSpeechProbability: Float
-    let maxNoSpeechProbability: Float
-    let averageTokenProbability: Float
-    let segmentCount: Int
-    let segmentDiagnostics: [TranscriptionSegmentDiagnostic]
 }
 
 final class DebugRecordingStore {
@@ -255,6 +248,7 @@ final class DebugRecordingStore {
         insertionMethod: InsertionMethod? = nil,
         issueMessage: String? = nil,
         errorMessage: String? = nil,
+        audioConfiguration: AudioCaptureConfiguration? = nil,
         diagnostics: SpeechActivityDiagnostics? = nil,
         chunks: [DebugRecordingChunkPlan] = [],
         transcriptionPasses: [DebugRecordingTranscriptionPass] = []

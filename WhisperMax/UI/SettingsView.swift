@@ -31,6 +31,9 @@ struct SettingsSection: View {
             TriggerSettingsCard()
             ModelSettingsCard()
             InputSettingsCard()
+#if DEBUG
+            DebugRecordingSettingsCard()
+#endif
             HistorySettingsCard()
             PermissionsSettingsCard()
             AboutSettingsCard()
@@ -165,8 +168,33 @@ private enum ModelFileInspector {
     static func byteSize(at path: String) -> Int64? {
         guard !path.isEmpty else { return nil }
         let url = URL(fileURLWithPath: path)
-        let values = try? url.resourceValues(forKeys: [.fileSizeKey])
-        return values?.fileSize.map(Int64.init)
+        guard let values = try? url.resourceValues(forKeys: [.isDirectoryKey, .fileSizeKey]) else {
+            return nil
+        }
+        if values.isDirectory != true {
+            return values.fileSize.map(Int64.init)
+        }
+
+        guard let files = FileManager.default.enumerator(
+            at: url,
+            includingPropertiesForKeys: [.isRegularFileKey, .fileSizeKey]
+        ) else {
+            return nil
+        }
+
+        var total: Int64 = 0
+        var foundFile = false
+        for case let fileURL as URL in files {
+            guard let file = try? fileURL.resourceValues(forKeys: [.isRegularFileKey, .fileSizeKey]),
+                  file.isRegularFile == true,
+                  let size = file.fileSize
+            else {
+                continue
+            }
+            foundFile = true
+            total += Int64(size)
+        }
+        return foundFile ? total : nil
     }
 }
 
@@ -218,6 +246,41 @@ private struct InputSettingsCard: View {
         }
     }
 }
+
+#if DEBUG
+private struct DebugRecordingSettingsCard: View {
+    @AppStorage("RetainDebugRecordings") private var retainAudioLocally = false
+
+    var body: some View {
+        SettingsCard(title: "DEBUG RECORDING RETENTION") {
+            VStack(alignment: .leading, spacing: 12) {
+                Toggle("Keep test audio and transcripts on this Mac", isOn: $retainAudioLocally)
+                    .font(.system(size: 12.5, weight: .medium))
+                    .toggleStyle(.checkbox)
+
+                HStack {
+                    Text("Saved in WhisperMax’s local DebugRecordings folder.")
+                        .font(.system(size: 11.5, weight: .regular))
+                        .foregroundStyle(SettingsTheme.secondaryText)
+
+                    Spacer()
+
+                    Button("Open folder") {
+                        let folder = ModelLocator.debugRecordingsDirectory
+                        try? FileManager.default.createDirectory(
+                            at: folder,
+                            withIntermediateDirectories: true
+                        )
+                        NSWorkspace.shared.open(folder)
+                    }
+                    .disabled(!retainAudioLocally)
+                }
+            }
+            .buttonStyle(.borderless)
+        }
+    }
+}
+#endif
 
 private struct InputPickerButton: View {
     let label: String

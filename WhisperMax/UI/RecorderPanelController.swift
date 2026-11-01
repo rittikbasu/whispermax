@@ -35,7 +35,7 @@ final class RecorderPanelController {
 
     func update(for phase: RecordingPhase) {
         switch phase {
-        case .recording, .transcribing, .inserted, .error:
+        case .starting, .cancellingStart, .recording, .transcribing, .inserted, .error:
             show()
         case .ready, .loadingModel:
             hide()
